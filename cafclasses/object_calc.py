@@ -6,6 +6,7 @@ from sbnd.prism import *
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_squared_log_error
 from scipy.stats import pearsonr
 import copy
+from pyanalib import panda_helpers
 #from pyanalib import panda_helpers
 
 def get_neutrino_dir(start):
@@ -124,6 +125,60 @@ def merge_objs(objs,keys,clas):
     objs_copy[i] = obj #update
   return clas(pd.concat(objs_copy,axis=0))
   
+def check_reference(obj,obj_comp):
+  """
+  Checks that the object can refer to the other one
+  
+  obj: object with indices we wish to reference
+  obj_comp: object we are referencing
+  """
+  #Index depth
+  obj_ind_depth = len(obj.index.values[0])
+  obj_comp_ind_depth = len(obj_comp.index.values[0])
+  
+  #Assert that the depth of the comparison object matches the number of matched keys
+  assert np.sum([k in obj_comp.index.names for k in obj.index.names]) == obj_comp_ind_depth, "Depth doesn't match the number of matched keys"
+  assert obj_ind_depth >= obj_comp_ind_depth, "Depth of compared object is less than that of object, this is not supported"
+  
+  return True
+  
+
+def split_obj_into_bins(obj,obj_comp,bins,key,low_to_high=True):
+  """
+  Split an object into bins, need obj_comp to parse the bins
+  Make sure obj_comp.loc[:,key] matches units of bins
+  
+  obj: object to split
+  obj_comp: object to compare to, must have key with binning of obj_comp
+  bins: bins to split into
+  key: key to split on
+  low_to_high: if true, bins are aranged from low to high, otherwise high to low
+  
+  """
+  if not check_reference(obj,obj_comp): return None #check that the object can refer to the other one
+  #Index depth
+  obj_ind_depth = len(obj.index.values[0])
+  obj_comp_ind_depth = len(obj_comp.index.values[0])
+  
+  #Get key into tuple format
+  key = panda_helpers.getcolumns([key],depth=len(obj_comp.keys()[0]))[0]
+  obj_inds_set = set(obj.index.values)
+  objs_list = [None]*(len(bins)-1)
+  for i,theta in enumerate(bins):
+    if theta == bins[-1]: break #skip last bin to avoid range errors
+    #Get indices that are within prism bins
+    if low_to_high:
+      obj_comp_inds_inrange_set = set(obj_comp[(obj_comp.loc[:,key] <= bins[i+1]) & (obj_comp.loc[:,key] > bins[i])].index.values)
+    else:
+      obj_comp_inds_inrange_set = set(obj_comp[(obj_comp.loc[:,key] >= bins[i+1]) & (obj_comp.loc[:,key] < bins[i])].index.values)
+    #Get the object's indices
+    if obj_ind_depth > obj_comp_ind_depth:
+      obj_inds_inrange = utils.get_inds_from_sub_inds(obj_inds_set,obj_comp_inds_inrange_set,obj_comp_ind_depth)
+    elif obj_ind_depth == obj_comp_ind_depth:
+      obj_inds_inrange = obj_comp_inds_inrange_set #One to one correspondence
+    objs_list[i] = obj.loc[obj_inds_inrange]
+  return objs_list
+    
   
   
   

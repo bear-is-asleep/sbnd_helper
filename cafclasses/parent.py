@@ -3,6 +3,8 @@ import numpy as np
 from pyanalib import panda_helpers
 from sbnd.volume import *
 from sbnd.constants import *
+from sbnd.cafclasses import object_calc
+from sbnd.general import utils
 
 class CAF(DataFrame):
     def __init__(self,df):
@@ -22,7 +24,7 @@ class CAF(DataFrame):
       """
       Add key to dataframe
       """
-      updated_df = panda_helpers.multicol_addkey(self, keys,fill=fill)
+      updated_df = panda_helpers.multicol_addkey(self, keys,fill=fill,inplace=False)
       # Update the current PFP object with the new DataFrame
       for col in updated_df.columns.difference(self.columns):
           self[col] = updated_df[col]
@@ -47,6 +49,23 @@ class CAF(DataFrame):
       if col_key[0] in self.columns:
         return True
       return False
+    def split(self,bins,key,obj_comp=None,low_to_high=True):
+      """
+      Split self into list of self's split by bins determined by obj_comp
+      """
+      if obj_comp is None: obj_comp = self
+      return object_calc.split_obj_into_bins(self,obj_comp,bins,key,low_to_high=low_to_high)
+    def get_reference_obj(self,ref):
+      """
+      Use index of self to reference another object
+      """
+      if not object_calc.check_reference(self,ref): return None #check that the object can refer to the other one
+      ref_inds = utils.get_inds_from_sub_inds(set(self.index.values),set(ref.index.values),len(ref.index.values[0]))
+      return ref.loc[ref_inds]
+      
+      
+      
+      
         
       
       

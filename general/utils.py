@@ -8,6 +8,7 @@ from pathlib import Path
 import os
 import numba as nb
 from itertools import chain
+import pandas as pd
 
 def move_file(fname,folder_name,overwrite=True):
   # Move the file to the folder
@@ -97,6 +98,8 @@ def get_inds_from_sub_inds(inds,sub_inds,length):
   inds: set of indices (bigger)
   sub_inds: set of indices to check (smaller)
   """
+  inds = set(inds)
+  sub_inds = set(sub_inds)
   return [i for i in inds if i[:length] in sub_inds]
 
 def flatten_list(l):
@@ -106,3 +109,51 @@ def flatten_list(l):
   l: list of lists
   """
   return list(chain.from_iterable(l))
+
+def join_dataframes(list1, list2, wrapper=None):
+  """
+  Join two dataframes with common indices
+  """
+  matrix = []
+  for i in range(len(list1)):
+      row = []
+      for j in range(len(list2)):
+          # join dataframes with common indices
+          list1_inds = list1[i].index.values
+          list2_inds = list2[j].index.values
+          common_inds = find_indices_in_common(list1_inds,list2_inds)
+          df = list1[i].loc[common_inds]
+          if wrapper is not None:
+              df = wrapper(df)
+          row.append(df)
+      matrix.append(row)
+  return matrix
+
+def join_three_dataframes(list1, list2, list3, wrapper=None):
+  """
+  Join three dataframes with common indices
+  """
+  matrix = []
+  for i in range(len(list1)):
+      row = []
+      for j in range(len(list2)):
+          col = []
+          for k in range(len(list3)):
+              # join dataframes with common indices
+              list1_inds = list1[i].index.values
+              list2_inds = list2[j].index.values
+              common_inds = find_indices_in_common(list1_inds,list2_inds)
+              list3_inds = list3[k].index.values
+              common_inds = find_indices_in_common(common_inds,list3_inds)
+              df = list1[i].loc[common_inds]
+              if wrapper is not None:
+                df = wrapper(df)
+              col.append(df)
+          row.append(row)
+      matrix.append(row)
+  return matrix
+
+def sort_by_other_list(main_list, other_list):
+    sorted_tuples = sorted(zip(other_list, main_list))
+    sorted_list = [element for _, element in sorted_tuples]
+    return sorted_list
