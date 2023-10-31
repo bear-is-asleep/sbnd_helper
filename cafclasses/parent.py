@@ -18,6 +18,7 @@ class CAF:
         raise ValueError("key structure not correct")
       self.pot = pot #POT to make sample
       self.key_depth = self.key_length() #depth of keys
+      self.index_depth = len(self.data.index.values[0]) #depth of indices
       self.check_for_duplicates() #assert there are no indexing duplicates 
       self.clean() #set dummy values to nan
       self.data.sort_index(inplace=True)
@@ -75,8 +76,11 @@ class CAF:
       """
       Use index of self to reference another object
       """
-      if not object_calc.check_reference(self.data,ref.data): return None #check that the dfect can refer to the other one
-      ref_inds = utils.get_inds_from_sub_inds(set(self.data.index.values),set(ref.data.index.values),len(ref.data.index.values[0]))
+      if not object_calc.check_reference(self.data,ref.data): return None #check that the object can refer to the other one
+      if self.key_depth < ref.key_depth:
+        ref_inds = utils.get_inds_from_sub_inds(set(self.data.index.values),set(ref.data.index.values),len(ref.data.index.values[0]))
+      elif self.key_depth > ref.key_depth:
+        ref_inds = utils.get_sub_inds_from_inds(set(self.data.index.values),set(ref.data.index.values),len(ref.data.index.values[0]))
       return ref.data.loc[ref_inds]
     def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True):
       """

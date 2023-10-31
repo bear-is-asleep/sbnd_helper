@@ -29,8 +29,8 @@ class MCPRIM(CAF):
       Run all post processing
       """
       s0 = time()
-      self.drop_noninteracting()
       self.apply_nu_cuts(nu=nu) 
+      self.drop_noninteracting()
       s1 = time()
       print(f'--apply nu cuts: {s1-s0:.2f} s')
       #self.drop_neutrinos() - this is taken care of by drop noninteracting
@@ -100,11 +100,7 @@ class MCPRIM(CAF):
       Drop rows with neutrinos
       """
       has_nu = (abs(self.data.pdg) == 14) | (abs(self.data.pdg) == 12)
-      self = MCPRIM(self.data[~has_nu]
-                    ,prism_bins=self.prism_binning
-                    ,momentum_bins=self.momentum_binning
-                    ,costheta_bins=self.costheta_binning)
-      return self
+      self.data = self.data[~has_nu]
     def drop_noninteracting(self):
       """
       Drop rows where the visible energy is zero
@@ -163,6 +159,8 @@ class MCPRIM(CAF):
           raise Exception("Need to provide nu object since it hasn't been set yet")
         else:
           self.set_nu_inrange(nu)
+          if self.nu_inrange_df.index.duplicated().any():
+            raise Exception("There are duplicated indices in the nu object")
       return self.nu_inrange_df is not None
     def get_genweight(self,nu=None):
       """

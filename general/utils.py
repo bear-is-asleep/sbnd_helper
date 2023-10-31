@@ -100,11 +100,26 @@ def get_inds_from_sub_inds(inds,sub_inds,length):
   inds = set(inds)
   sub_inds = set(sub_inds)
   matched_inds = set()
-  dummy_ind = (0,0)
   
   for _,ind in enumerate(inds):
       if ind[:length] in sub_inds:
           matched_inds.add(ind)
+  return list(matched_inds)
+
+def get_sub_inds_from_inds(inds,sub_inds,length):
+  """
+  Get the indices of sub_inds that are in inds
+  
+  inds: set of indices (bigger)
+  sub_inds: set of indices to check (smaller)
+  """
+  inds = set(inds)
+  sub_inds = set(sub_inds)
+  matched_inds = set()
+  
+  for _,ind in enumerate(inds):
+      if ind[:length] in sub_inds:
+          matched_inds.add(ind[:length])
   return list(matched_inds)
 
 def flatten_list(l):

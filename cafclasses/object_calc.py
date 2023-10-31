@@ -208,7 +208,7 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
   
   #Set dummy value to -1
   df.loc[:,assign_key] = np.full(len(df),-1)
-  
+
   for i,b in enumerate(bins):
     if b == bins[-1]: break #skip last bin to avoid range errors
     #Get indices that are within prism bins
