@@ -32,7 +32,7 @@ class MCPRIM(CAF):
       self.apply_nu_cuts(nu=nu) 
       self.drop_noninteracting()
       s1 = time()
-      print(f'--apply nu cuts: {s1-s0:.2f} s')
+      print(f'--apply cuts: {s1-s0:.2f} s')
       #self.drop_neutrinos() - this is taken care of by drop noninteracting
       self.add_fv()
       self.add_nu_dir()
