@@ -1,47 +1,76 @@
 from pandas import DataFrame
 import numpy as np
+from time import time
+
 from pyanalib import panda_helpers
 from sbnd.volume import *
 from sbnd.constants import *
-from .parent import CAF
+from sbnd.cafclasses.parent import CAF
 from sbnd.cafclasses.object_calc import *
 
 class MCPRIM(CAF):
-    def __init__(self,df,prism_bins=None,momentum_bins=None,theta_bins=None,nu=None):
-      super().__init__(df)
-      self.nu_inrange = None
-      self.assign_prism_bins(prism_bins)
-      self.assign_momentum_bins(momentum_bins)
-      self.assign_theta_bins(theta_bins)
-    def assign_prism_bins(self,prism_bins):
-      """
-      Assign prism bins
-      """
-      self.prism_bins = prism_bins
-    def assign_momentum_bins(self,momentum_bins):
-      """
-      Assign momentum bins
-      """
-      self.momentum_bins = momentum_bins
-    def assign_theta_bins(self,theta_bins):
-      """
-      Assign theta bins
-      """
-      self.theta_bins = theta_bins
+    def __init__(self,*args,prism_bins=None,momentum_bins=None,costheta_bins=None,**kwargs):
+      super().__init__(*args,**kwargs)
+      self.nu_inrange_df = None
+      self.set_prism_bins(prism_bins)
+      self.set_momentum_bins(momentum_bins)
+      self.set_costheta_bins(costheta_bins)
+    @property
+    def _constructor(self):
+        return MCPRIM
+    def __getitem__(self, item):
+        data = super().__getitem__(item) #Series or dataframe get item
+        return MCPRIM(data,prism_bins=self.prism_binning,momentum_bins=self.momentum_binning,costheta_bins=self.costheta_binning)
+    def copy(self, deep=True):
+        data = super().copy(deep)
+        return MCPRIM(data, prism_bins=self.prism_binning, momentum_bins=self.momentum_binning, costheta_bins=self.costheta_binning)
     def postprocess(self,nu=None):
       """
       Run all post processing
       """
-      self.clean()
-      self = self.drop_noninteracting()
-      #self = self.drop_neutrinos() - this is taken care of by drop noninteracting
+      s0 = time()
+      self.drop_noninteracting()
+      self.apply_nu_cuts(nu=nu) 
+      s1 = time()
+      print(f'--apply nu cuts: {s1-s0:.2f} s')
+      #self.drop_neutrinos() - this is taken care of by drop noninteracting
       self.add_fv()
       self.add_nu_dir()
       self.add_theta()
       self.add_costheta()
       self.add_momentum_mag()
-      #self.add_genweight(nu=nu)
-      return MCPRIM(self) #Have to return since we're dropping rows
+      s2 = time()
+      print(f'--add variables: {s2-s1:.2f} s')
+      #Assign binning
+      self.assign_prism_bins(nu=nu)
+      self.assign_costheta_bins()
+      self.assign_momentum_bins()
+      s3 = time()
+      print(f'--assign bins: {s3-s2:.2f} s')
+    def apply_nu_cuts(self,nu=None):
+      """
+      Apply cuts from nu object - MAKE SURE THE CUTS ARE ALREADY APPLIED TO THE NU OBJECT
+      """
+      nu_ind_depth = len(nu.data.index.values[0])
+      inds = utils.get_inds_from_sub_inds(self.data.index.values,nu.data.index.values,nu_ind_depth)
+      self.data = self.data.loc[inds]
+      self.data.sort_index(inplace=True)
+    def set_prism_bins(self,prism_bins):
+      """
+      Set prism bins
+      """
+      self.prism_binning = prism_bins
+    def set_momentum_bins(self,momentum_bins):
+      """
+      Set momentum bins
+      """
+      self.momentum_binning = momentum_bins
+    def set_costheta_bins(self,costheta_bins):
+      """
+      Set costtheta bins
+      """
+      self.costheta_binning = costheta_bins
+      
     def add_fv(self):
       """
       Add containment for start and end of particle
@@ -51,40 +80,38 @@ class MCPRIM(CAF):
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.loc[:,cols[0]] = involume(self.start) & involume(self.end)
+      self.data.loc[:,cols[0]] = involume(self.data.start) & involume(self.data.end)
       return None
     def get_true_parts(self,remove_nan=True,**dropna_args):
       """
       return true particles from track and shower matching
       """
-      particles = self.copy()
       if remove_nan:
-        particles = particles.dropna(**dropna_args)
-      return MCPRIM(particles)
+        self.data = self.data.dropna(**dropna_args)
     
     def get_true_parts_from_pdg(self,pdg,remove_nan=True,**dropna_args):
       """
       Return particles from pdg
       """
-      particles = self.get_true_parts(remove_nan=remove_nan,**dropna_args)
-      particles = particles[abs(particles.pdg) == pdg]
-      
-      return MCPRIM(particles)
+      self = self.get_true_parts(remove_nan=remove_nan,**dropna_args)
+      self.data = self.data[abs(self.pdg) == pdg]
     def drop_neutrinos(self):
       """
       Drop rows with neutrinos
       """
-      has_nu = (abs(self.pdg) == 14) | (abs(self.pdg) == 12)
-      self = MCPRIM(self[~has_nu])
+      has_nu = (abs(self.data.pdg) == 14) | (abs(self.data.pdg) == 12)
+      self = MCPRIM(self.data[~has_nu]
+                    ,prism_bins=self.prism_binning
+                    ,momentum_bins=self.momentum_binning
+                    ,costheta_bins=self.costheta_binning)
       return self
     def drop_noninteracting(self):
       """
       Drop rows where the visible energy is zero
       """
-      visible = (((self.plane.I0.I0.nhit + self.plane.I0.I1.nhit + self.plane.I0.I2.nhit) > 0) &
-                 [val is not np.nan for val in self.plane.I0.I0.nhit])
-      self = MCPRIM(self[visible])
-      return self
+      visible = (((self.data.plane.I0.I0.nhit + self.data.plane.I0.I1.nhit + self.data.plane.I0.I2.nhit) > 0) &
+                 [val is not np.nan for val in self.data.plane.I0.I0.nhit])
+      self.data = self.data[visible] 
     def add_nu_dir(self):
       """
       add nu dir - we are using the start point of the primary which is not technically correct 
@@ -95,7 +122,7 @@ class MCPRIM(CAF):
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.loc[:,cols[0:3]] = get_neutrino_dir(self.start)
+      self.data.loc[:,cols[0:3]] = get_neutrino_dir(self.data.start)
     def add_theta(self,convert_to_deg=True):
       """
       add dir
@@ -105,84 +132,100 @@ class MCPRIM(CAF):
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.loc[:,cols[0]] = get_theta(np.array(self.genp.values,dtype=np.float64),
-                                      np.array(self.nu.dir.values,dtype=np.float64))
+      self.data.loc[:,cols[0]] = get_theta(np.array(self.data.genp.values,dtype=np.float64),
+                                      np.array(self.data.nu.dir.values,dtype=np.float64))
       if convert_to_deg:
-        self.loc[:,cols[0]] = self.loc[:,cols[0]]*180/np.pi #usefule for prism
+        self.data.loc[:,cols[0]] = self.data.loc[:,cols[0]]*180/np.pi #usefule for prism
     def add_momentum_mag(self):
       """
       Add magnitude of momentum
       """
-      mag = np.linalg.norm(self.genp,axis=1) #calc magnitude before adding key
+      mag = np.linalg.norm(self.data.genp,axis=1) #calc magnitude before adding key
       keys = [
         'genp.tot'
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.loc[:,cols[0]] = mag
-    def add_costheta(self,convert_to_rad=True):
-      """
-      add costheta
-      """
-      keys = [
-        'costheta'
-      ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      if convert_to_rad:
-        self.loc[:,cols[0]] = np.cos(self.theta/180*np.pi)*np.sign(self.theta)
-      else:
-        self.loc[:,cols[0]] = np.cos(self.theta)*np.sign(self.theta)
-    # def add_genweight(self,nu=None):
-    #   """
-    #   Add gen weight from mcnu object
-    #   """
-    #   keys = [
-    #     'genweight'
-    #   ]
-    #   self.add_key(keys)
-    #   cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    #   if nu is not None:
-    #     inds = utils.get_inds_from_sub_inds(set(self.index.values),set(nu.index.values),3)
-    #     weights = nu.loc[inds,'genweight'].values
-    #   else:
-    #     weights = np.ones(len(self))
-    #   self.loc[:,cols[0]] = weights
+      self.data.loc[:,cols[0]] = mag
     def set_nu_inrange(self,nu):
       """
       Get neutrino in current indices
       """
-      self.nu_inrange = self.get_reference_obj(nu)
+      self.nu_inrange_df = self.get_reference_df(nu)
+    def clear_nu_inrange(self):
+      self.nu_inrange_df = None #overwrite data
     def check_nu_inrange(self,nu=None):
       """
       Check that neutrino is in current indices
       """
-      if self.nu_inrange is None:
+      if self.nu_inrange_df is None:
         if nu is None:
           raise Exception("Need to provide nu object since it hasn't been set yet")
-          return None
         else:
           self.set_nu_inrange(nu)
-      return self.nu_inrange is not None
+      return self.nu_inrange_df is not None
     def get_genweight(self,nu=None):
       """
       Get genie weights from nu object
       """
-      check_nu_inrange(nu=nu)
-      return self.nu_inrange.genweight
+      if not self.check_nu_inrange(nu=nu): return None
+      genweight = self.nu_inrange_df.genweight 
+      self.clear_nu_inrange()
+      return genweight
     def get_genmode(self,nu=None):
       """
       Get interaction mode from nu object
       """
-      check_nu_inrange(nu=nu)
-      return self.nu_inrange.genie_mode
+      if not self.check_nu_inrange(nu=nu): return None
+      genmode = self.nu_inrange_df.genie_mode
+      self.clear_nu_inrange()
+      return genmode
     def get_numevents(self,nu=None):
       """
       Get number of events from nu object
       """
       weights = self.get_genweight(nu=nu)
       return np.sum(weights)
+    def assign_prism_bins(self,prism_bins=None,nu=None):
+      """
+      Assign prism bins to dataframe
       
+      prism_bins: prism bins set 
+      nu: nu object
+      """
+      if prism_bins is not None: self.set_prism_bins(prism_bins=prism_bins)
+      keys = [
+        'prism_bins'
+      ]
+      self.add_key(keys)
+      if not self.check_nu_inrange(nu=nu): return None
+      self.assign_bins(self.prism_binning,'theta',df_comp=self.nu_inrange_df,assign_key='prism_bins',low_to_high=True)
+      self.clear_nu_inrange()
+    def assign_costheta_bins(self,costheta_bins=None):
+      """
+      Assign costheta bins to dataframe
+      
+      costheta_bins: costheta bins set 
+      """
+      if costheta_bins is not None: self.set_costheta_bins(costheta_bins=costheta_bins)
+      keys = [
+        'costheta_bins'
+      ]
+      self.add_key(keys)
+      self.assign_bins(self.costheta_binning,'costheta',df_comp=None,assign_key='costheta_bins',low_to_high=True)
+    def assign_momentum_bins(self,momentum_bins=None):
+      """
+      Assign momentum bins to dataframe
+      
+      momentum_bins: momentum bins set 
+      """
+      if momentum_bins is not None: self.set_momentum_bins(momentum_bins=momentum_bins)
+      keys = [
+        'momentum_bins'
+      ]
+      self.add_key(keys)
+      self.assign_bins(self.momentum_binning,'genp.tot',df_comp=None,assign_key='momentum_bins',low_to_high=True)
+    
     
       
       

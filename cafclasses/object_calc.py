@@ -124,61 +124,116 @@ def merge_objs(objs,keys,clas):
     obj.columns = cols
     objs_copy[i] = obj #update
   return clas(pd.concat(objs_copy,axis=0))
-  
-def check_reference(obj,obj_comp):
+
+def check_reference(df,df_comp):
   """
-  Checks that the object can refer to the other one
+  Checks that the dataframe can refer to the other one
   
-  obj: object with indices we wish to reference
-  obj_comp: object we are referencing
+  df: dataframe with indices we wish to reference
+  df_comp: dataframe we are referencing
   """
   #Index depth
-  obj_ind_depth = len(obj.index.values[0])
-  obj_comp_ind_depth = len(obj_comp.index.values[0])
+  df_ind_depth = len(df.index.values[0])
+  df_comp_ind_depth = len(df_comp.index.values[0])
   
-  #Assert that the depth of the comparison object matches the number of matched keys
-  assert np.sum([k in obj_comp.index.names for k in obj.index.names]) == obj_comp_ind_depth, "Depth doesn't match the number of matched keys"
-  assert obj_ind_depth >= obj_comp_ind_depth, "Depth of compared object is less than that of object, this is not supported"
+  #Assert that the depth of the comparison dataframe matches the number of matched keys
+  assert np.sum([k in df_comp.index.names for k in df.index.names]) == df_comp_ind_depth, "Depth doesn't match the number of matched keys"
+  assert df_ind_depth >= df_comp_ind_depth, "Depth of compared dataframe is less than that of dataframe, this is not supported"
   
   return True
   
 
-def split_obj_into_bins(obj,obj_comp,bins,key,low_to_high=True):
+def split_df_into_bins(df,df_comp,bins,key,low_to_high=True):
   """
-  Split an object into bins, need obj_comp to parse the bins
-  Make sure obj_comp.loc[:,key] matches units of bins
+  Split an dataframe into bins, need df_comp to parse the bins
+  Make sure df_comp.loc[:,key] matches units of bins
   
-  obj: object to split
-  obj_comp: object to compare to, must have key with binning of obj_comp
+  df: dataframe to split
+  df_comp: dataframe to compare to, must have key with binning of df_comp
   bins: bins to split into
   key: key to split on
   low_to_high: if true, bins are aranged from low to high, otherwise high to low
   
   """
-  if not check_reference(obj,obj_comp): return None #check that the object can refer to the other one
+  if not check_reference(df,df_comp): return None #check that the dataframe can refer to the other one
   #Index depth
-  obj_ind_depth = len(obj.index.values[0])
-  obj_comp_ind_depth = len(obj_comp.index.values[0])
+  df_ind_depth = len(df.index.values[0])
+  df_comp_ind_depth = len(df_comp.index.values[0])
   
   #Get key into tuple format
-  key = panda_helpers.getcolumns([key],depth=len(obj_comp.keys()[0]))[0]
-  obj_inds_set = set(obj.index.values)
-  objs_list = [None]*(len(bins)-1)
-  for i,theta in enumerate(bins):
-    if theta == bins[-1]: break #skip last bin to avoid range errors
+  key = panda_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
+  df_inds_set = set(df.index.values)
+  dfs_list = [None]*(len(bins)-1)
+  for i,b in enumerate(bins):
+    if b == bins[-1]: break #skip last bin to avoid range errors
     #Get indices that are within prism bins
     if low_to_high:
-      obj_comp_inds_inrange_set = set(obj_comp[(obj_comp.loc[:,key] <= bins[i+1]) & (obj_comp.loc[:,key] > bins[i])].index.values)
+      df_comp_inds_inrange_set = set(df_comp[(df_comp.loc[:,key] <= bins[i+1]) & (df_comp.loc[:,key] > bins[i])].index.values)
     else:
-      obj_comp_inds_inrange_set = set(obj_comp[(obj_comp.loc[:,key] >= bins[i+1]) & (obj_comp.loc[:,key] < bins[i])].index.values)
-    #Get the object's indices
-    if obj_ind_depth > obj_comp_ind_depth:
-      obj_inds_inrange = utils.get_inds_from_sub_inds(obj_inds_set,obj_comp_inds_inrange_set,obj_comp_ind_depth)
-    elif obj_ind_depth == obj_comp_ind_depth:
-      obj_inds_inrange = obj_comp_inds_inrange_set #One to one correspondence
-    objs_list[i] = obj.loc[obj_inds_inrange]
-  return objs_list
+      df_comp_inds_inrange_set = set(df_comp[(df_comp.loc[:,key] >= bins[i+1]) & (df_comp.loc[:,key] < bins[i])].index.values)
+    #Get the dataframe's indices
+    if df_ind_depth > df_comp_ind_depth:
+      df_inds_inrange = utils.get_inds_from_sub_inds(df_inds_set,df_comp_inds_inrange_set,df_comp_ind_depth)
+    elif df_ind_depth == df_comp_ind_depth:
+      df_inds_inrange = df_comp_inds_inrange_set #One to one correspondence
+    dfs_list[i] = df.loc[df_inds_inrange]
+  return dfs_list
+
+def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
+  """
+  Find an dataframe's bins and assign new key to store these bins
+  Need df_comp to parse the bins
+  Make sure df_comp.loc[:,key] matches units of bins
+  
+  df: dataframe to split
+  df_comp: dataframe to compare to, must have key with binning of df_comp
+  bins: bins to split into
+  key: key to split on
+  assign_key: key to assign bin id to
+  low_to_high: if true, bins are aranged from low to high, otherwise high to low
+  
+  """
+  if not check_reference(df,df_comp): return None #check that the dataframe can refer to the other one
+  #Index depth
+  df_ind_depth = len(df.index.values[0])
+  df_comp_ind_depth = len(df_comp.index.values[0])
+  
+  #Get key into tuple format
+  key = panda_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
+  assign_key = panda_helpers.getcolumns([assign_key],depth=len(df.keys()[0]))[0]
+  
+  #Reference indices
+  df_inds_set = set(df.index.values)
+  df_comp_inds = df_comp.index.values
+  
+  #Set dummy value to -1
+  df.loc[:,assign_key] = np.full(len(df),-1)
+  
+  for i,b in enumerate(bins):
+    if b == bins[-1]: break #skip last bin to avoid range errors
+    #Get indices that are within prism bins
+    if low_to_high:
+      df_comp_inds_inrange_set = set(df_comp[(df_comp.loc[df_comp_inds,key] <= bins[i+1])\
+        & (df_comp.loc[df_comp_inds,key] > bins[i])].index.values)
+    else:
+      df_comp_inds_inrange_set = set(df_comp[(df_comp.loc[df_comp_inds,key] >= bins[i+1])\
+        & (df_comp.loc[df_comp_inds,key] < bins[i])].index.values)
+    #Get the dataframe's indices
+    if df_ind_depth > df_comp_ind_depth:
+      df_inds_inrange = utils.get_inds_from_sub_inds(df_inds_set,df_comp_inds_inrange_set,df_comp_ind_depth)
+    elif df_ind_depth == df_comp_ind_depth:
+      df_inds_inrange = df_comp_inds_inrange_set #One to one correspondence
+    array_size = len(df.loc[df_inds_inrange])
+    df.loc[df_inds_inrange,assign_key] = np.full(array_size,i)
+    print(i,array_size,len(df_comp_inds))
     
+    #Clean comp inds, we don't need the ones that have been assigned already
+    df_comp_inds = list(subtract_sets(set(df_comp_inds),df_comp_inds_inrange_set))
+    df_comp = df_comp.loc[df_comp_inds]
+  return df
+
+def subtract_sets(set1, set2):
+  return set1.difference(set2)
   
   
   

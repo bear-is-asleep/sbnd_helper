@@ -13,8 +13,19 @@ trkscore_key = ('trackScore','','','','')
 pdg_key = ('shw','truth','p','pdg','')
 
 class PFP(CAF):
-  def __init__(self,df):
-    super().__init__(df)
+  def __init__(self,*args,**kwargs):
+    super().__init__(*args,**kwargs)
+  @property
+  def _constructor(self):
+      return PFP
+  def __getitem__(self, item):
+        result = super().__getitem__(item)
+
+        if isinstance(result, DataFrame) or isinstance(result, pd.Series):
+            result = result.to_frame() if isinstance(result, pd.Series) else result
+            return PFP(result)
+        else:
+            return result
   def postprocess(self,fill=-5,dummy=-5,is_cheat=False):
     """
     Do all the post processing in the correct order

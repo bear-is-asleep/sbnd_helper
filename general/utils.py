@@ -90,7 +90,6 @@ def numba_dot(a, b):
     result[i] = np.dot(a[i],b[i])
   return result
 
-#@nb.jit(nopython=True)
 def get_inds_from_sub_inds(inds,sub_inds,length):
   """
   Get the indices of inds that are in sub_inds
@@ -100,7 +99,13 @@ def get_inds_from_sub_inds(inds,sub_inds,length):
   """
   inds = set(inds)
   sub_inds = set(sub_inds)
-  return [i for i in inds if i[:length] in sub_inds]
+  matched_inds = set()
+  dummy_ind = (0,0)
+  
+  for _,ind in enumerate(inds):
+      if ind[:length] in sub_inds:
+          matched_inds.add(ind)
+  return list(matched_inds)
 
 def flatten_list(l):
   """
