@@ -9,11 +9,17 @@ from sbnd.cafclasses.object_calc import *
 from sbnd.cafclasses.parent import CAF
 
 class NU(CAF):
-  def __init__(self,*args,**kwargs):
+  def __init__(self,*args,prism_bins=None,**kwargs):
     super().__init__(*args,**kwargs)
+    self.set_prism_bins(prism_bins)
   def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
         return NU(data)
+  def set_prism_bins(self,prism_bins):
+    """
+    Set prism bins
+    """
+    self.prism_binning = prism_bins
   def postprocess(self):
     """
     Run all post processing
@@ -50,6 +56,10 @@ class NU(CAF):
     self.add_costheta()
     s3 = time()
     print(f'--add rest: {s3-s2:.2f} s')
+    #Bin by prism bin
+    self.assign_prism_bins()
+    s4 = time()
+    print(f'--assign binning: {s4-s3:.2f} s')
   def add_av(self):
     """
     Add containment 1 or 0 for each pfp
@@ -113,5 +123,18 @@ class NU(CAF):
       keys = ['genweight']
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = np.ones(len(self)) #initialize to ones
-    self.data.genweight = self.data.genweight/nom_pot*sample_pot
+      self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
+    print(f'--scaling to POT: {sample_pot:.2e} -> {nom_pot:.2e}')
+    self.data.genweight = self.data.genweight*nom_pot/sample_pot
+  def assign_prism_bins(self,prism_bins=None):
+    """
+    Assign prism bins to dataframe
+    
+    prism_bins is a list of prism bin edges
+    """
+    if prism_bins is not None: self.set_prism_bins(prism_bins)
+    keys = [
+      'prism_bins'
+    ]
+    self.add_key(keys)
+    self.assign_bins(self.prism_binning,'theta',assign_key='prism_bins',low_to_high=True)

@@ -33,17 +33,16 @@ class CAF:
     def check_for_duplicates(self):
       assert not self.data.index.duplicated().any(), "Duplicate indices found"
     def copy(self,deep=True):
-      data = super().copy(deep)
-      return CAF(data)
+      return CAF(self.data.copy(deep),pot=self.pot)
     def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
-        return CAF(data)
+        return CAF(data,pot=self.pot)
     def add_key(self,keys,fill=np.nan):
       """
       Add key to dataframe
       """
       updated_df = panda_helpers.multicol_addkey(self.data, keys,fill=fill,inplace=False)
-      # Update the current dfect with the new DataFrame
+      # Update the current df with the new DataFrame
       for col in updated_df.columns.difference(self.data.columns):
           self.data[col] = updated_df[col]
       return self
@@ -63,7 +62,7 @@ class CAF:
       check if a key is in the dataframe
       """
       col_key = panda_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
-      if col_key[0] in self.columns:
+      if col_key[0] in self.data.columns:
         return True
       return False
     def split(self,bins,key,df_comp=None,low_to_high=True):

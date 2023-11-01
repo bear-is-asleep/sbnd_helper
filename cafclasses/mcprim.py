@@ -20,10 +20,17 @@ class MCPRIM(CAF):
         return MCPRIM
     def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
-        return MCPRIM(data,prism_bins=self.prism_binning,momentum_bins=self.momentum_binning,costheta_bins=self.costheta_binning)
+        return MCPRIM(data
+                      ,prism_bins=self.prism_binning
+                      ,momentum_bins=self.momentum_binning
+                      ,costheta_bins=self.costheta_binning
+                      ,pot=self.pot)
     def copy(self, deep=True):
-        data = super().copy(deep)
-        return MCPRIM(data, prism_bins=self.prism_binning, momentum_bins=self.momentum_binning, costheta_bins=self.costheta_binning)
+        return MCPRIM(self.data.copy(deep)
+                      ,prism_bins=self.prism_binning
+                      ,momentum_bins=self.momentum_binning
+                      ,costheta_bins=self.costheta_binning
+                      ,pot=self.pot)
     def postprocess(self,nu=None):
       """
       Run all post processing
@@ -39,6 +46,8 @@ class MCPRIM(CAF):
       self.add_theta()
       self.add_costheta()
       self.add_momentum_mag()
+      self.add_genweight(nu=nu) #generator weights
+      self.add_genmode(nu=nu) #generator modes
       s2 = time()
       print(f'--add variables: {s2-s1:.2f} s')
       #Assign binning
@@ -86,15 +95,18 @@ class MCPRIM(CAF):
       """
       return true particles from track and shower matching
       """
+      mcprim = self.copy()
       if remove_nan:
-        self.data = self.data.dropna(**dropna_args)
+        mcprim.data = self.data.dropna(**dropna_args)
+      return mcprim
     
     def get_true_parts_from_pdg(self,pdg,remove_nan=True,**dropna_args):
       """
       Return particles from pdg
       """
-      self = self.get_true_parts(remove_nan=remove_nan,**dropna_args)
-      self.data = self.data[abs(self.pdg) == pdg]
+      mcprim = self.get_true_parts(remove_nan=remove_nan,**dropna_args)
+      mcprim.data = mcprim.data[abs(mcprim.data.pdg) == pdg]
+      return mcprim
     def drop_neutrinos(self):
       """
       Drop rows with neutrinos
@@ -223,6 +235,49 @@ class MCPRIM(CAF):
       ]
       self.add_key(keys)
       self.assign_bins(self.momentum_binning,'genp.tot',df_comp=None,assign_key='momentum_bins',low_to_high=True)
+    def add_genweight(self,nu=None):
+      """
+      Add genie weights from nu object
+      """
+      if not self.check_nu_inrange(nu=nu): return None
+      keys = [
+        'genweight'
+      ]
+      self.add_key(keys)
+      #Get neutrino indices
+      nu_inds = utils.get_sub_inds_from_inds(set(self.data.index.values)
+                                       ,set(self.nu_inrange_df.index.values)
+                                       ,len(self.nu_inrange_df.index.values[0]))
+      assert len(nu_inds) == len(self.nu_inrange_df.loc[nu_inds]), "Number of indices don't match"
+      self.data.loc[:,keys[0]] = self.nu_inrange_df.loc[nu_inds].genweight
+      self.clear_nu_inrange()
+    def add_genmode(self,nu=None):
+      """
+      Add interaction mode from nu object
+      """
+      if not self.check_nu_inrange(nu=nu): return None
+      keys = [
+        'genie_mode'
+      ]
+      self.add_key(keys)
+      #Get neutrino indices
+      nu_inds = utils.get_sub_inds_from_inds(set(self.data.index.values)
+                                       ,set(self.nu_inrange_df.index.values)
+                                       ,len(self.nu_inrange_df.index.values[0]))
+      assert len(nu_inds) == len(self.nu_inrange_df.loc[nu_inds]), "Number of indices don't match"
+      #Sort indices
+      self.data.loc[:,keys[0]] = self.nu_inrange_df.loc[nu_inds].genie_mode
+      self.clear_nu_inrange()
+    def get_part_count(self,pdg=None):
+      """
+      Return the number of particles with pdg. 
+      If no pdg specified return total number of particles
+      """
+      if pdg is None:
+        return np.sum(self.data.genweight)
+      else:
+        return np.sum(self.data.genweight[self.data.pdg == pdg])
+      
     
     
       
