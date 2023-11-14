@@ -60,6 +60,10 @@ class NU(CAF):
     self.assign_prism_bins()
     s4 = time()
     print(f'--assign binning: {s4-s3:.2f} s')
+    #Scale to POT
+    self.scale_to_pot(self.pot)
+    s5 = time()
+    print(f'--scale to POT: {s5-s4:.2f} s')
   def add_av(self):
     """
     Add containment 1 or 0 for each pfp

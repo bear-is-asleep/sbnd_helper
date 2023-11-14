@@ -22,6 +22,8 @@ class CAF:
       self.check_for_duplicates() #assert there are no indexing duplicates 
       self.clean() #set dummy values to nan
       self.data.sort_index(inplace=True)
+    def keys(self):
+      return self.data.keys()
     def key_length(self):
       return len(self.data.keys()[0])
     def check_key_structure(self):

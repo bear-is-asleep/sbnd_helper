@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+from tqdm import tqdm
 from sbnd.general import utils
 from sbnd.constants import *
 from sbnd.prism import *
@@ -179,7 +180,7 @@ def split_df_into_bins(df,df_comp,bins,key,low_to_high=True):
     dfs_list[i] = df.loc[df_inds_inrange]
   return dfs_list
 
-def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
+def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True,ntuple_keys=True):
   """
   Find an dataframe's bins and assign new key to store these bins
   Need df_comp to parse the bins
@@ -191,7 +192,7 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
   key: key to split on
   assign_key: key to assign bin id to
   low_to_high: if true, bins are aranged from low to high, otherwise high to low
-  
+  ntuple_keys: if true, keys are in tuple format, otherwise they are strings
   """
   if not check_reference(df,df_comp): return None #check that the dataframe can refer to the other one
   #Index depth
@@ -199,8 +200,9 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
   df_comp_ind_depth = len(df_comp.index.values[0])
   
   #Get key into tuple format
-  key = panda_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
-  assign_key = panda_helpers.getcolumns([assign_key],depth=len(df.keys()[0]))[0]
+  if ntuple_keys:
+    key = panda_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
+    assign_key = panda_helpers.getcolumns([assign_key],depth=len(df.keys()[0]))[0]
   
   #Reference indices
   df_inds_set = set(df.index.values)
@@ -209,7 +211,7 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
   #Set dummy value to -1
   df.loc[:,assign_key] = np.full(len(df),-1)
 
-  for i,b in enumerate(bins):
+  for i,b in tqdm(enumerate(bins)):
     if b == bins[-1]: break #skip last bin to avoid range errors
     #Get indices that are within prism bins
     if low_to_high:
@@ -225,7 +227,7 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True):
       df_inds_inrange = df_comp_inds_inrange_set #One to one correspondence
     array_size = len(df.loc[df_inds_inrange])
     df.loc[df_inds_inrange,assign_key] = np.full(array_size,i)
-    print(i,array_size,len(df_comp_inds))
+    #print(i,array_size,len(df_comp_inds))
     
     #Clean comp inds, we don't need the ones that have been assigned already
     df_comp_inds = list(subtract_sets(set(df_comp_inds),df_comp_inds_inrange_set))

@@ -129,7 +129,7 @@ def add_label(ax,text,where='topright',**kwargs):
           horizontalalignment='center',
           verticalalignment='bottom',**kwargs)
   elif where == 'toprightoutside':
-    ax.text(0.99,1.05,text,
+    ax.text(0.99,1.15,text,
             transform=ax.transAxes,
             horizontalalignment='right',
             verticalalignment='top',**kwargs)

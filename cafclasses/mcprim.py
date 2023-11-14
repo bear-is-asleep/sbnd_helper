@@ -241,15 +241,16 @@ class MCPRIM(CAF):
       """
       if not self.check_nu_inrange(nu=nu): return None
       keys = [
-        'genweight'
+        'nu.genweight'
       ]
       self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       #Get neutrino indices
       nu_inds = utils.get_sub_inds_from_inds(set(self.data.index.values)
                                        ,set(self.nu_inrange_df.index.values)
                                        ,len(self.nu_inrange_df.index.values[0]))
       assert len(nu_inds) == len(self.nu_inrange_df.loc[nu_inds]), "Number of indices don't match"
-      self.data.loc[:,keys[0]] = self.nu_inrange_df.loc[nu_inds].genweight
+      self.data.loc[:,cols[0]] = self.nu_inrange_df.loc[nu_inds].genweight
       self.clear_nu_inrange()
     def add_genmode(self,nu=None):
       """
@@ -257,16 +258,35 @@ class MCPRIM(CAF):
       """
       if not self.check_nu_inrange(nu=nu): return None
       keys = [
-        'genie_mode'
+        'nu.genie_mode'
       ]
       self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       #Get neutrino indices
       nu_inds = utils.get_sub_inds_from_inds(set(self.data.index.values)
                                        ,set(self.nu_inrange_df.index.values)
                                        ,len(self.nu_inrange_df.index.values[0]))
       assert len(nu_inds) == len(self.nu_inrange_df.loc[nu_inds]), "Number of indices don't match"
       #Sort indices
-      self.data.loc[:,keys[0]] = self.nu_inrange_df.loc[nu_inds].genie_mode
+      self.data.loc[:,cols[0]] = self.nu_inrange_df.loc[nu_inds].genie_mode
+      self.clear_nu_inrange()
+    def add_prism_theta(self,nu=None):
+      """
+      Add prism theta from nu object
+      """
+      if not self.check_nu_inrange(nu=nu): return None
+      keys = [
+        'nu.prism_theta'
+      ]
+      self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      #Get neutrino indices
+      nu_inds = utils.get_sub_inds_from_inds(set(self.data.index.values)
+                                       ,set(self.nu_inrange_df.index.values)
+                                       ,len(self.nu_inrange_df.index.values[0]))
+      assert len(nu_inds) == len(self.nu_inrange_df.loc[nu_inds]), "Number of indices don't match"
+      #Sort indices
+      self.data.loc[:,cols[0]] = self.nu_inrange_df.loc[nu_inds].theta
       self.clear_nu_inrange()
     def get_part_count(self,pdg=None):
       """

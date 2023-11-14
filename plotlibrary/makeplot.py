@@ -86,5 +86,57 @@ def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
       h = ax.step(edges, list(values)+[values[-1]], where='post', label=label,**pltkwargs)
       if errors is not None: 
           e = ax.errorbar(centers, values, yerr=errors, elinewidth=3,fmt='none', color=h[0].get_color(),alpha=0.6) 
-  
+
+def make_mode_plots(nu_df,mode_map,weights=None,ylabel='Events',bins=np.arange(0,5.1,0.1),density=False,title=None,
+                    ax=None,fig=None,**pltkwargs):
+  norm = len(nu_df)/np.sum(nu_df.genweight.values)
+  modes = np.unique(nu_df.genie_mode.values)
+  Es = [None]*len(modes)
+  counts = Es.copy()
+  labels = Es.copy()
+  if weights is not None:
+    weight_modes = Es.copy()
+  for i,mode in enumerate(modes):
+    Es[i] = list(nu_df[nu_df.genie_mode==mode].E) #Get energy from mode
+    labels[i] = f'{mode_map[mode]} : {round(len(Es[i])/norm):,}' #Mode label and 
+    if weights is not None:
+      weight_modes[i] = nu_df[nu_df.genie_mode==mode].genweight
+  if fig is None and ax is None: #Make figure if not provided
+    fig,ax = plt.subplots(figsize=(10,8))
+  if not density:
+    if weights is None:
+      ax.hist(Es,stacked=True,label=labels,bins=bins,**pltkwargs)
+    else:
+      ax.hist(Es,stacked=True,label=labels,weights=weight_modes,bins=bins,**pltkwargs)
+  if density:
+    # Calculate total counts in each bin across all modes first
+    if weights is None:
+      total_counts, edges = np.histogram(np.concatenate(Es), bins=bins)
+    else:
+      total_counts, edges = np.histogram(np.concatenate(Es), bins=bins, weights=np.concatenate(weight_modes))
+    bottom = np.zeros(len(total_counts))
+    actual_counts = bottom.copy()
+    for i,_ in enumerate(modes):
+      if weights is None:
+        counts, edges = np.histogram(Es[i], bins=bins)
+      else:
+        counts, edges = np.histogram(Es[i], weights=weight_modes[i], bins=bins)
+      actual_counts += counts
+      fractions = counts / total_counts
+      ax.bar(edges[:-1], height=fractions, bottom=bottom, align='edge', width=np.diff(edges), label=labels[i],fill=True, **pltkwargs)
+      # Add the fraction as text in the middle of the bar
+      # bar_centers = edges[:-1] + np.diff(edges) / 2  # Calculate the center of each bar
+      # for i,(center, fraction) in enumerate(zip(bar_centers, fractions)):
+      #   if np.isnan(fraction): continue
+      #   ax.text(center, bottom[i] + fraction / 2, f'{fraction*100:.1f}%', ha='center', va='center',rotation=90)
+      bottom += fractions  # Update the bottom for the next mode
+      bottom = [b if not np.isnan(b) else 0 for b in bottom]
+    ax.grid(True)
+  if title is None:
+    title = rf'{round(len(nu_df)/norm):,} $\nu_\mu CC$ events'
+  ax.set_title(title)
+  ax.set_xlabel(r'$E_\nu$ [GeV]')
+  if ylabel is not None:
+    ax.set_ylabel(f'{ylabel} / {round((bins[1]-bins[0])*1e3):,} MeV')
+  return fig,ax  
   
