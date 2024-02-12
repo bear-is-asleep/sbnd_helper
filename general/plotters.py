@@ -58,11 +58,11 @@ def save_plot(fname, fig=None, ftype='.png', dpi=300, folder_name=None, overwrit
     fig.savefig(f'{fname}{ftype}', bbox_inches="tight", dpi=dpi)
   move_file(f'{fname}{ftype}',folder_name,overwrite=overwrite)
     
-def set_style(ax,legend_size=16,legend_loc='best',axis_size=16,title_size=20,tick_size=16,
+def set_style(ax,legend_size=12,legend_loc='best',axis_size=16,title_size=20,tick_size=16,
               bbox_to_anchor=None):
+  #based on (8,6 figure)
   #plt.style.use('science')
-  ax.tick_params(axis='x', labelsize=tick_size)
-  ax.tick_params(axis='y', labelsize=tick_size)
+  ax.tick_params(labelsize=tick_size)
   ax.xaxis.label.set_size(axis_size)
   ax.yaxis.label.set_size(axis_size)
   ax.title.set_size(title_size)

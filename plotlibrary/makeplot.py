@@ -6,22 +6,21 @@ import numpy as np
 
 day = plotters.day
 
-def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',draw_edge=False,
+def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,
               **pltkwargs):
   """
   series is a list of pd.Series
   """
   fig,ax = plt.subplots(figsize=(7,4))
-  legend_labels = [f'{lab} ({len(series[i])})' for i,lab in enumerate(labels)]
-  colors = cm.get_cmap(cmap, len(labels))
-  colors = [list(colors(i)) for i in range(len(labels))]
-  edgecolors = colors.copy()
-  print(edgecolors)
-  if draw_edge:
-    ax.hist(series,label=legend_labels,color=colors,edgecolor=edgecolors,
-            **pltkwargs)
+  if weights is None:
+    counts = [len(s) for s in series]
   else:
-    ax.hist(series,label=legend_labels,color=colors,**pltkwargs)
+    counts = [round(np.sum(w)) for w in weights]
+  legend_labels = [f'{lab} ({counts[i]:,})' for i,lab in enumerate(labels)]
+  if colors is None:
+    colors = cm.get_cmap(cmap, len(labels))
+    colors = [list(colors(i)) for i in range(len(labels))]
+  ax.hist(series,label=legend_labels,color=colors,weights=weights,**pltkwargs)
   ax.set_xlabel(xlabel)
   if title is not None:
     ax.set_title(title)
@@ -81,12 +80,16 @@ def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
   if ax is None:
       h = plt.step(edges, list(values)+[values[-1]], where='post', label=label,**pltkwargs)
       if errors is not None: 
-          e = plt.errorbar(centers, values, yerr=errors, elinewidth=3,fmt='none', color=h[0].get_color(),alpha=0.6)
+          e = plt.errorbar(centers, values, yerr=errors, elinewidth=3,fmt='none', color=h[0].get_color(),alpha=0.6,capsize=7)
+      else:
+          e = None
   else:
       h = ax.step(edges, list(values)+[values[-1]], where='post', label=label,**pltkwargs)
       if errors is not None: 
-          e = ax.errorbar(centers, values, yerr=errors, elinewidth=3,fmt='none', color=h[0].get_color(),alpha=0.6) 
-
+          e = ax.errorbar(centers, values, yerr=errors, elinewidth=3,fmt='none', color=h[0].get_color(),alpha=0.6,capsize=7) 
+      else:
+          e = None
+  return h,e
 def make_mode_plots(nu_df,mode_map,weights=None,ylabel='Events',bins=np.arange(0,5.1,0.1),density=False,title=None,
                     ax=None,fig=None,**pltkwargs):
   norm = len(nu_df)/np.sum(nu_df.genweight.values)

@@ -7,157 +7,75 @@ from sbnd.volume import *
 from sbnd.constants import *
 from .parent import CAF
 
-ntrk_key = ('ntrk','','','','')
-nshw_key = ('nshw','','','','')
-trkscore_key = ('trackScore','','','','')
-pdg_key = ('shw','truth','p','pdg','')
 
 class PFP(CAF):
-  def __init__(self,*args,**kwargs):
+  #-------------------- constructor/rep --------------------#
+  def __init__(self,*args,momentum_bins=None,costheta_bins=None,**kwargs):
     super().__init__(*args,**kwargs)
+    self.set_momentum_bins(momentum_bins)
+    self.set_costheta_bins(costheta_bins)
+    self.clean([-5]) #set dummy values to nan, for some reason pandora uses -5??
   @property
   def _constructor(self):
       return PFP
   def __getitem__(self, item):
-        result = super().__getitem__(item)
-
-        if isinstance(result, DataFrame) or isinstance(result, pd.Series):
-            result = result.to_frame() if isinstance(result, pd.Series) else result
-            return PFP(result)
-        else:
-            return result
-  def postprocess(self,fill=-5,dummy=-5,is_cheat=False):
+    data = super().__getitem__(item)
+    return PFP(data
+               ,prism_bins=self.prism_binning
+               ,momentum_bins=self.momentum_binning
+               ,costheta_bins=self.costheta_binning
+               ,pot=self.pot)
+  def copy(self, deep=True):
+    return PFP(self.data.copy(deep)
+                  ,prism_bins=self.prism_binning
+                  ,momentum_bins=self.momentum_binning
+                  ,costheta_bins=self.costheta_binning
+                  ,pot=self.pot)
+  def load(fname,key,**kwargs):
     """
-    Do all the post processing in the correct order
+    Load data from hdf5 file
     """
-    self.shw_energy_fix(fill=fill,dummy=dummy)
-    #fill dummy's with nan before calculations
-    self.clean() 
-    self.count_tracks_showers(is_cheat=is_cheat)
-    self.add_reco_containment()
-    self.add_trk_bestenergy()
-    self.add_neutrino_dir()
-    self.add_theta()
-    self.add_Etheta()
-    self.clean(dummy_vals=[-5])
-    #self.add_errs()
-    
-  def stats(self):
-    self.add_stat(get_err,'mae',normalize=True)
-    self.add_stat(get_err,'dif',normalize=False)
-    
-    
-  def get_particles(self,pdgs,remove_nan=True,**dropna_args):
+    df = pd.read_hdf(fname,key=key,**kwargs)
+    pfp = PFP(df,**kwargs)
+    return pfp
+  #-------------------- setters --------------------#
+  def set_momentum_bins(self,momentum_bins):
     """
-    Return list of particles from list of pdgs
+    Set momentum bins
     """
-    parts = [None]*len(pdgs)
-    for i,pdg in enumerate(pdgs):
-      parts[i] = self.get_true_parts_from_pdg(pdg,remove_nan=remove_nan,**dropna_args)
-    return parts
-
-  def shw_energy_fix(self,fill=-5,dummy=-5):
-      ## correct the reconstructed shower energy column
-      nhits2 = ((self.shw.plane.I2.nHits >= self.shw.plane.I1.nHits) & (self.shw.plane.I2.nHits>= self.shw.plane.I0.nHits))
-      nhits1 = ((self.shw.plane.I1.nHits >= self.shw.plane.I2.nHits) & (self.shw.plane.I1.nHits>= self.shw.plane.I0.nHits))
-      nhits0 = ((self.shw.plane.I0.nHits >= self.shw.plane.I2.nHits) & (self.shw.plane.I0.nHits>= self.shw.plane.I1.nHits))
-      # if energy[plane] is positive
-      energy2 = (self.shw.plane.I2.energy > 0 )
-      energy1 = (self.shw.plane.I1.energy > 0 )
-      energy0 = (self.shw.plane.I0.energy > 0 )
-      conditions = [(nhits2 & energy2),
-                  (nhits1 & energy1),
-                  (nhits0 & energy0),
-                  (((nhits2 & energy2)== False) & (energy1) & (self.shw.plane.I1.nHits>= self.shw.plane.I0.nHits)), # if 2 is invalid, and 1 is positive and 1>0, go with 1 
-                  (((nhits2 & energy2)== False) & (energy0) & (self.shw.plane.I0.nHits>= self.shw.plane.I1.nHits)), # if 2 is invalid, and 0 is positive and 0>1, go with 0
-                  (((nhits1 & energy1)== False) & (energy2) & (self.shw.plane.I2.nHits>= self.shw.plane.I0.nHits)), # if 1 is invalid, and 2 is positive and 2>0, go with 2 
-                  (((nhits1 & energy1)== False) & (energy0) & (self.shw.plane.I0.nHits>= self.shw.plane.I2.nHits)), # if 1 is invalid, and 0 is positive and 0>2, go with 0
-                  (((nhits0 & energy0)== False) & (energy2) & (self.shw.plane.I2.nHits>= self.shw.plane.I1.nHits)), # if 0 is invalid, and 2 is positive and 2>1, go with 2              
-                  (((nhits0 & energy0)== False) & (energy1) & (self.shw.plane.I1.nHits>= self.shw.plane.I2.nHits)), # if 0 is invalid, and 1 is positive and 1>2, go with 1 
-                  ((self.shw.plane.I2.nHits==dummy) & (self.shw.plane.I1.nHits==dummy) & (self.shw.plane.I0.nHits==dummy))]
-      shw_choices = [ self.shw.plane.I2.energy,
-                      self.shw.plane.I1.energy,
-                      self.shw.plane.I0.energy,
-                      self.shw.plane.I1.energy,
-                      self.shw.plane.I0.energy,
-                      self.shw.plane.I2.energy,
-                      self.shw.plane.I0.energy,
-                      self.shw.plane.I2.energy,
-                      self.shw.plane.I1.energy,
-                      -1]
-      self.loc[:,panda_helpers.getcolumns(['shw.bestplane_energy'],depth=self.key_length())] = np.select(conditions, shw_choices, default = fill)
-      return None
-  #----This can and should be optimized in the future
-  def count_tracks_showers(self,is_cheat=False):
+    self.momentum_binning = momentum_bins
+  def set_costheta_bins(self,costheta_bins):
     """
-    Store number of tracks and showers in pfp df
+    Set costtheta bins
     """
+    self.costheta_binning = costheta_bins
+  def set_nu_inrange(self,nu):
+    """
+    Get neutrino in current indices
+    """
+    self.nu_inrange_df = self.get_reference_df(nu)
+  
+  #-------------------- adders --------------------#
+  def add_pfp_semantics(self,method='naive'):
+    """
+    classify each as shower or track
+    """
+    #naive method for now
+    if method == 'naive':
+      is_trk = (self.data.trackScore < 0.5) & (self.data.trackScore >= 0)
+      is_shw = (self.data.trackScore >= 0.5) & (self.data.trackScore <= 1)
+    else:
+      print(f'Method "{method}" not an option, choose from - "naive"')
+      raise ValueError('Method not implemented')
+    other = ~(is_trk | is_shw)
     keys = [
-      'ntrk',
-      'nshw',
-      'true_ntrk',
-      'true_nshw',
+      'semantic_type'
     ]
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    if is_cheat:
-      self.add_key('ntrk',fill=0)
-      self.add_key('nshw',fill=1)
-      self.add_key('true_ntrk',fill=0)
-      self.add_key('true_nshw',fill=1)
-    if not is_cheat:
-      self.add_key(keys,fill=0)
-      particles = self.get_true_parts(remove_nan=False)
-      for ix,row in self.iterrows():
-        self.loc[ix,cols[0]] = ((self.loc[ix,trkscore_key] > 0.5).values & (self.loc[ix,trkscore_key] <= 1).values).sum()
-        self.loc[ix,cols[1]] = ((self.loc[ix,trkscore_key] <= 0.5).values & (self.loc[ix,trkscore_key] >=0).values).sum()
-      for ind in particles.index.drop_duplicates():
-        true_ntrk,true_nshw = count_true_tracks_showers(particles.pdg.loc[ind])
-        self.loc[ind,cols[2]] = true_ntrk
-        self.loc[ind,cols[3]] = true_nshw
-    return None
-  def get_total_reco_energy(self):
-    """
-    Return total reco energy from pfp
-    """
-    return get_row_vals(self.shw.bestplane_energy) #Add tracks later
-  def get_min_theta(self):
-    """
-    Return minimum theta from pfp
-    """
-    return get_row_vals(self.shw.theta,mode='min')
-  def remove_dummy_track_score(self):
-    """
-    Make a column that determines if the pfp is valid or not. 
-    For now this just means it has a track score E [0,1]
-    """
-    mask_lower = self.loc[:,trkscore_key] >= 0
-    mask_upper = self.loc[:,trkscore_key] <= 1
-    mask = np.logical_and(mask_lower,mask_upper)
-    self = self[mask]
-    return None
-  
-  def get_true_parts(self,remove_nan=True,**dropna_args):
-    """
-    return true particles from track and shower matching
-    """
-    particles = self.copy()
-    particles = pd.concat([particles.trk.truth.p,particles.shw.truth.p],axis=0).drop_duplicates()
-    if remove_nan:
-      particles = particles.dropna(**dropna_args)
-    return particles
-  
-  def get_true_parts_from_pdg(self,pdg,remove_nan=True,**dropna_args):
-    """
-    Return particles from pdg
-    """
-    particles = self.get_true_parts(remove_nan=remove_nan,**dropna_args)
-    
-    return particles[particles.pdg == pdg]
-  def add_true_tracks_showers(self):
-    """
-    count truth level tracks showers
-    """
-    pass
+    self.add_key(keys,fill=False)
+    self.data.loc[is_trk,cols[0]] = 0
+    self.data.loc[is_shw,cols[0]] = 1
+    self.data.loc[other,cols[0]] = -1
   
   def add_reco_containment(self):
     """
@@ -169,24 +87,99 @@ class PFP(CAF):
     ]
     self.add_key(keys)
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.loc[:,cols[0]] = involume(self.shw.start) & involume(self.shw.end)
-    self.loc[:,cols[1]] = involume(self.trk.start) & involume(self.trk.end)
-    return None
+    self.data.loc[:,cols[0]] = involume(self.data.shw.start) & involume(self.data.shw.end)
+    self.data.loc[:,cols[1]] = involume(self.data.trk.start) & involume(self.data.trk.end)
   
-  def add_trk_bestenergy(self):
+  def add_stats(self):
+    self.add_stat(get_err,'mae',normalize=True)
+    self.add_stat(get_err,'dif',normalize=False)
+  
+  def add_bestpdg(self,method='dazzle_best',include_other=False):
     """
-    Get best energy for track
+    https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=24747&filename=20220215_Mun%20Jung%20Jung.pdf&version=1
+    Get best pdg for track and showers
     """
+    is_trk = self.data.semantic_type == 0
+    if include_other: #assume other is track if not matched to semantic type
+      is_trk = is_trk | (self.data.semantic_type == -1)
+    is_shw = self.data.semantic_type == 1
+    is_other = ~(is_trk | is_shw)
+    
+    if method == 'dazzle_best':
+      is_muon = (self.data.trk.dazzle.pdg == 13) & is_trk
+      is_proton = (self.data.trk.dazzle.pdg == 2212) & is_trk
+      is_pion = (self.data.trk.dazzle.pdg == 211) & is_trk
+      is_electron = (self.data.shw.razzle.pdg == 11) & is_shw
+      is_photon = (self.data.shw.razzle.pdg == 22) & is_shw
+    elif method == 'dazzle': #can tune the values
+      is_muon = (self.data.trk.dazzle.muonScore > 0.6) & is_trk
+      is_proton = (self.data.trk.dazzle.protonScore > 0.6) & is_trk
+      is_pion = (self.data.trk.dazzle.pionScore > 0.6) & is_trk
+      is_electron = (self.data.shw.razzle.electronScore > 0.6) & is_shw
+      is_photon = (self.data.shw.razzle.photonScore > 0.6) & is_shw
+    elif method == 'x2': #can tune values
+      is_muon = (self.data.trk.len > 50) \
+            & (self.data.trk.chi2pid.I2.chi2_muon < 25) \
+            & (self.data.trk.chi2pid.I2.chi2_proton > 70) \
+            & is_trk
+      is_proton = (self.data.trk.chi2pid.I2.chi2_proton < 90) & is_trk
+      is_pion = ~is_muon & ~is_proton & is_trk \
+        & (~self.data.trk.chi2pid.I2.isna().all(axis=1)) #not all NAN
+      #naive estimate using dedx https://arxiv.org/pdf/1610.04102.pdf fig 9
+      is_electron = (self.data.shw.bestplane_dEdx < 2.5) & is_shw
+      is_photon = ~is_electron & is_shw \
+        & (~self.data.shw.bestplane_dEdx.isna()) #not all NAN
+    
+    else:
+      print(f'Method "{method}" not an option, choose from - "x2", "dazzle_best", "dazzle"')
+      raise ValueError('Method not implemented')
+    
+    #add key
     keys = [
-      'trk.bestenergy',
+      'bestpdg'
     ]
     self.add_key(keys)
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    cont = self.trk.cont_tpc #containment boolean
-    #----Assume muon, for now
-    self.loc[:,cols[0]][cont] = np.sqrt(self.trk.rangeP.p_muon**2+mu**2)
-    self.loc[:,cols[0]][~cont] = np.sqrt(self.trk.mcsP.fwdP_muon**2+mu**2)
-    return None
+    self.data.loc[is_muon,cols[0]] = 13
+    self.data.loc[is_proton,cols[0]] = 2212
+    self.data.loc[is_pion,cols[0]] = 211
+    self.data.loc[is_electron,cols[0]] = 11
+    self.data.loc[is_photon,cols[0]] = 22
+  
+  def add_trk_bestenergy(self,method='dazzle_best'):
+    """
+    Get best energy for track
+    """
+    cont = self.data.trk.cont_tpc #containment boolean
+    #PDG booleans
+    muon = self.data.bestpdg == 13
+    proton = self.data.bestpdg == 2212
+    pion = self.data.bestpdg == 211
+    
+    keys = [
+      'trk.bestenergy',
+      'trk.bestmom'
+    ]
+    self.add_key(keys)
+    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+    #muon
+    self.data.loc[cont & muon,cols[0]] = np.sqrt(self.data[cont & muon].trk.rangeP.p_muon**2+kMuonMass**2)
+    self.data.loc[cont & muon,cols[1]] = self.data[cont & muon].trk.mcsP.fwdP_muon
+    
+    self.data.loc[~cont & muon,cols[0]] = np.sqrt(self.data[~cont & muon].trk.mcsP.fwdP_muon**2+kMuonMass**2)
+    self.data.loc[~cont & muon,cols[1]] = self.data[~cont & muon].trk.mcsP.fwdP_muon
+    #pion
+    self.data.loc[cont & pion,cols[0]] = np.sqrt(self.data[cont & pion].trk.rangeP.p_pion**2+kPionMass**2)
+    self.data.loc[cont & pion,cols[1]] = self.data[cont & pion].trk.mcsP.fwdP_pion
+    
+    self.data.loc[~cont & pion,cols[0]] = np.sqrt(self.data[~cont & pion].trk.mcsP.fwdP_pion**2+kPionMass**2)
+    self.data.loc[~cont & pion,cols[1]] = self.data[~cont & pion].trk.mcsP.fwdP_pion
+    #proton
+    self.data.loc[cont & proton,cols[0]] = np.sqrt(self.data[cont & proton].trk.rangeP.p_proton**2+kProtonMass**2)
+    self.data.loc[cont & proton,cols[1]] = self.data[cont & proton].trk.mcsP.fwdP_proton
+    
+    self.data.loc[~cont & proton,cols[0]] = np.sqrt(self.data[~cont & proton].trk.mcsP.fwdP_proton**2+kProtonMass**2)
+    self.data.loc[~cont & proton,cols[1]] = self.data[~cont & proton].trk.mcsP.fwdP_proton
     
   def add_neutrino_dir(self):
     """
@@ -200,11 +193,10 @@ class PFP(CAF):
     ]
     self.add_key(keys)
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.loc[:,cols[0:3]] = get_neutrino_dir(self.shw.start)
-    self.loc[:,cols[3:6]]= get_neutrino_dir(self.shw.truth.p.start)
-    self.loc[:,cols[6:9]] = get_neutrino_dir(self.trk.start)
-    self.loc[:,cols[9:12]] = get_neutrino_dir(self.trk.truth.p.start)
-    return None
+    self.data.loc[:,cols[0:3]] = get_neutrino_dir(self.data.shw.start)
+    self.data.loc[:,cols[3:6]]= get_neutrino_dir(self.data.shw.truth.p.start)
+    self.data.loc[:,cols[6:9]] = get_neutrino_dir(self.data.trk.start)
+    self.data.loc[:,cols[9:12]] = get_neutrino_dir(self.data.trk.truth.p.start)
   
   def add_theta(self):
     """
@@ -218,11 +210,10 @@ class PFP(CAF):
     ]
     self.add_key(keys)
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.loc[:,cols[0]] = get_theta(self.shw.dir.values,self.shw.nudir.values)
-    self.loc[:,cols[1]]= get_theta(self.shw.truth.p.genp.values,self.shw.truth.p.nudir.values)
-    self.loc[:,cols[2]] = get_theta(self.trk.dir.values,self.trk.nudir.values)
-    self.loc[:,cols[3]] = get_theta(self.trk.truth.p.genp.values,self.trk.truth.p.nudir.values)
-    return None
+    self.data.loc[:,cols[0]] = get_theta(self.data.shw.dir.values,self.data.shw.nudir.values)
+    self.data.loc[:,cols[1]]= get_theta(self.data.shw.truth.p.genp.values,self.data.shw.truth.p.nudir.values)
+    self.data.loc[:,cols[2]] = get_theta(self.data.trk.dir.values,self.data.trk.nudir.values)
+    self.data.loc[:,cols[3]] = get_theta(self.data.trk.truth.p.genp.values,self.data.trk.truth.p.nudir.values)
   def add_Etheta(self):
     """
     add theta wrt nu direction
@@ -235,22 +226,21 @@ class PFP(CAF):
     ]
     self.add_key(keys)
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.loc[:,cols[0]] = self.shw.theta**2*self.shw.bestplane_energy
-    self.loc[:,cols[1]]= self.shw.truth.p.theta**2*self.shw.truth.p.genE
-    self.loc[:,cols[2]] = self.trk.theta**2*self.trk.bestenergy
-    self.loc[:,cols[3]]= self.trk.truth.p.theta**2*self.trk.truth.p.genE
-    return None
-  def add_visenergy(self):
-    """
-    Best plane true visible energy
-    """
-    keys = [
-      'shw.truth.p.bestplane_energy',
-      'trk.truth.p.bestplane_energy',
-    ]
-    self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.loc[:,cols[0]] = self.shw.truth
+    self.data.loc[:,cols[0]] = self.data.shw.theta**2*self.data.shw.bestplane_energy
+    self.data.loc[:,cols[1]]= self.data.shw.truth.p.theta**2*self.data.shw.truth.p.genE
+    self.data.loc[:,cols[2]] = self.data.trk.theta**2*self.data.trk.bestenergy
+    self.data.loc[:,cols[3]]= self.data.trk.truth.p.theta**2*self.data.trk.truth.p.genE
+  # def add_visenergy(self):
+  #   """
+  #   Best plane true visible energy
+  #   """
+  #   keys = [
+  #     'shw.truth.p.bestplane_energy',
+  #     'trk.truth.p.bestplane_energy',
+  #   ]
+  #   self.add_key(keys)
+  #   cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+  #   self.data.loc[:,cols[0]] = self.data.shw.truth
     
   def add_stat(self,func,key,**funkwargs):
     """
@@ -278,24 +268,170 @@ class PFP(CAF):
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
     
     #showers
-    self.loc[:,cols[0]] = func(self.shw.Etheta2,self.shw.truth.p.Etheta2,**funkwargs)
-    self.loc[:,cols[1]] = func(self.shw.bestplane_energy,self.shw.truth.p.genE,**funkwargs)
-    self.loc[:,cols[2]] = func(self.shw.theta,self.shw.truth.p.theta,**funkwargs)
-    self.loc[:,cols[3]] = func(self.shw.start.x,self.shw.truth.p.start.x,**funkwargs)
-    self.loc[:,cols[4]] = func(self.shw.start.y,self.shw.truth.p.start.y,**funkwargs)
-    self.loc[:,cols[5]] = func(self.shw.start.z,self.shw.truth.p.start.z,**funkwargs)
-    self.loc[:,cols[6]] = func(self.shw.start.values,self.shw.truth.p.start.values,**funkwargs)
+    self.data.loc[:,cols[0]] = func(self.data.shw.Etheta2,self.data.shw.truth.p.Etheta2,**funkwargs)
+    self.data.loc[:,cols[1]] = func(self.data.shw.bestplane_energy,self.data.shw.truth.p.genE,**funkwargs)
+    self.data.loc[:,cols[2]] = func(self.data.shw.theta,self.data.shw.truth.p.theta,**funkwargs)
+    self.data.loc[:,cols[3]] = func(self.data.shw.start.x,self.data.shw.truth.p.start.x,**funkwargs)
+    self.data.loc[:,cols[4]] = func(self.data.shw.start.y,self.data.shw.truth.p.start.y,**funkwargs)
+    self.data.loc[:,cols[5]] = func(self.data.shw.start.z,self.data.shw.truth.p.start.z,**funkwargs)
+    self.data.loc[:,cols[6]] = func(self.data.shw.start.values,self.data.shw.truth.p.start.values,**funkwargs)
     #tracks
-    self.loc[:,cols[7]] = func(self.trk.Etheta2,self.trk.truth.p.Etheta2,**funkwargs)
-    self.loc[:,cols[8]] = func(self.trk.bestenergy,self.trk.truth.p.genE,**funkwargs)
-    self.loc[:,cols[9]] = func(self.trk.theta,self.trk.truth.p.theta,**funkwargs)
-    self.loc[:,cols[10]] = func(self.trk.start.x,self.trk.truth.p.start.x,**funkwargs)
-    self.loc[:,cols[11]] = func(self.trk.start.y,self.trk.truth.p.start.y,**funkwargs)
-    self.loc[:,cols[12]] = func(self.trk.start.z,self.trk.truth.p.start.z,**funkwargs)
-    self.loc[:,cols[13]] = func(self.trk.start.values,self.trk.truth.p.start.values,**funkwargs)
+    self.data.loc[:,cols[7]] = func(self.data.trk.Etheta2,self.data.trk.truth.p.Etheta2,**funkwargs)
+    self.data.loc[:,cols[8]] = func(self.data.trk.bestenergy,self.data.trk.truth.p.genE,**funkwargs)
+    self.data.loc[:,cols[9]] = func(self.data.trk.theta,self.data.trk.truth.p.theta,**funkwargs)
+    self.data.loc[:,cols[10]] = func(self.data.trk.start.x,self.data.trk.truth.p.start.x,**funkwargs)
+    self.data.loc[:,cols[11]] = func(self.data.trk.start.y,self.data.trk.truth.p.start.y,**funkwargs)
+    self.data.loc[:,cols[12]] = func(self.data.trk.start.z,self.data.trk.truth.p.start.z,**funkwargs)
+    self.data.loc[:,cols[13]] = func(self.data.trk.start.values,self.data.trk.truth.p.start.values,**funkwargs)
 
     #If any stat is na, the others are also na
-    self[self.trk.stat.isna().any(axis=1)].trk.stat = np.nan
-    self[self.shw.stat.isna().any(axis=1)].shw.stat = np.nan
+    self.data[self.data.trk.stat.isna().any(axis=1)].trk.stat = np.nan
+    self.data[self.data.shw.stat.isna().any(axis=1)].shw.stat = np.nan
+  
+  def assign_costheta_bins(self,costheta_bins=None):
+    """
+    Assign costheta bins to dataframe
+    
+    costheta_bins: costheta bins set 
+    """
+    if costheta_bins is not None: self.set_costheta_bins(costheta_bins=costheta_bins)
+    keys = [
+      'costheta_bins'
+    ]
+    self.add_key(keys)
+    self.assign_bins(self.costheta_binning,'costheta',df_comp=None,assign_key='costheta_bins',low_to_high=True)
+  def assign_momentum_bins(self,momentum_bins=None):
+    """
+    Assign momentum bins to dataframe
+    
+    momentum_bins: momentum bins set 
+    """
+    if momentum_bins is not None: self.set_momentum_bins(momentum_bins=momentum_bins)
+    keys = [
+      'momentum_bins'
+    ]
+    self.add_key(keys)
+    self.assign_bins(self.momentum_binning,'genp.tot',df_comp=None,assign_key='momentum_bins',low_to_high=True)
+  
+  def postprocess(self,fill=np.nan,dummy=np.nan,method_sem='naive',method_pdg='x2'):
+    """
+    Do all the post processing in the correct order
+    """
+    #fixers
+    self.fix_shw_energy(fill=fill,dummy=dummy)
+    #adders
+    self.add_pfp_semantics(method=method_sem)
+    self.add_bestpdg(method=method_pdg)
+    self.add_reco_containment()
+    self.add_neutrino_dir()
+    self.add_theta()
+    self.add_trk_bestenergy()
+    self.add_Etheta()
+    self.add_stats()
+  
 
-    return None
+  #-------------------- getters --------------------#
+  def get_particles(self,pdgs,remove_nan=True,use_reco=False,**dropna_args):
+    """
+    Return list of particles from list of pdgs
+    """
+    parts = [None]*len(pdgs)
+    for i,pdg in enumerate(pdgs):
+      parts[i] = self.get_parts_from_pdg(pdg,remove_nan=remove_nan,use_reco=use_reco,**dropna_args)
+    return parts
+    
+  def get_total_reco_energy(self):
+    """
+    Return total reco energy from pfp
+    """
+    return get_row_vals(self.data.shw.bestplane_energy) #Add tracks later
+  def get_min_theta(self):
+    """
+    Return minimum theta from pfp
+    """
+    return get_row_vals(self.data.shw.theta,mode='min')
+  def get_true_parts(self,remove_nan=True,**dropna_args):
+    """
+    return true particles from track and shower matching
+    """
+    particles = self.copy()
+    p = pd.concat([particles.data.trk.truth.p,particles.data.shw.truth.p],axis=0).drop_duplicates()
+    if remove_nan:
+      p = p.dropna(**dropna_args)
+    particles.data = particles.data.loc[p.index] 
+    return particles
+  
+  def get_parts_from_pdg(self,pdg,remove_nan=True,use_reco=False,**dropna_args):
+    """
+    Return particles from pdg
+    """
+    if not use_reco:
+      particles = self.get_true_parts(remove_nan=remove_nan,**dropna_args)
+      p = particles.data[particles.data.trk.truth.p.pdg == pdg]
+    else:
+      particles = self.copy()
+      p = particles.data[particles.data.bestpdg == pdg]
+    return PFP(p
+               ,prism_bins=self.prism_binning
+               ,momentum_bins=self.momentum_binning
+               ,costheta_bins=self.costheta_binning
+               ,pot=self.pot)
+    
+  #-------------------- cleaners --------------------#
+  def clean_dummy_track_score(self):
+    """
+    Make a column that determines if the pfp is valid or not. 
+    For now this just means it has a track score E [0,1]
+    """
+    mask_lower = self.data.trackScore >= 0
+    mask_upper = self.data.trackScore <= 1
+    mask = np.logical_and(mask_lower,mask_upper)
+    self.data = self.data[mask]
+  def clean_nu_inrange(self):
+    self.nu_inrange_df = None #overwrite data
+  
+  #-------------------- checkers --------------------#
+  def check_nu_inrange(self,nu=None):
+    """
+    Check that neutrino is in current indices
+    """
+    if self.nu_inrange_df is None:
+      if nu is None:
+        raise Exception("Need to provide nu object since it hasn't been set yet")
+      else:
+        self.set_nu_inrange(nu)
+        if self.nu_inrange_df.index.duplicated().any():
+          raise Exception("There are duplicated indices in the nu object")
+    return self.nu_inrange_df is not None
+
+  #-------------------- fixers --------------------#
+  def fix_shw_energy(self,fill=-5,dummy=-5):
+      ## correct the reconstructed shower energy column
+      nhits2 = ((self.data.shw.plane.I2.nHits >= self.data.shw.plane.I1.nHits) & (self.data.shw.plane.I2.nHits>= self.data.shw.plane.I0.nHits))
+      nhits1 = ((self.data.shw.plane.I1.nHits >= self.data.shw.plane.I2.nHits) & (self.data.shw.plane.I1.nHits>= self.data.shw.plane.I0.nHits))
+      nhits0 = ((self.data.shw.plane.I0.nHits >= self.data.shw.plane.I2.nHits) & (self.data.shw.plane.I0.nHits>= self.data.shw.plane.I1.nHits))
+      # if energy[plane] is positive
+      energy2 = (self.data.shw.plane.I2.energy > 0 )
+      energy1 = (self.data.shw.plane.I1.energy > 0 )
+      energy0 = (self.data.shw.plane.I0.energy > 0 )
+      conditions = [(nhits2 & energy2),
+                  (nhits1 & energy1),
+                  (nhits0 & energy0),
+                  (((nhits2 & energy2)== False) & (energy1) & (self.data.shw.plane.I1.nHits>= self.data.shw.plane.I0.nHits)), # if 2 is invalid, and 1 is positive and 1>0, go with 1 
+                  (((nhits2 & energy2)== False) & (energy0) & (self.data.shw.plane.I0.nHits>= self.data.shw.plane.I1.nHits)), # if 2 is invalid, and 0 is positive and 0>1, go with 0
+                  (((nhits1 & energy1)== False) & (energy2) & (self.data.shw.plane.I2.nHits>= self.data.shw.plane.I0.nHits)), # if 1 is invalid, and 2 is positive and 2>0, go with 2 
+                  (((nhits1 & energy1)== False) & (energy0) & (self.data.shw.plane.I0.nHits>= self.data.shw.plane.I2.nHits)), # if 1 is invalid, and 0 is positive and 0>2, go with 0
+                  (((nhits0 & energy0)== False) & (energy2) & (self.data.shw.plane.I2.nHits>= self.data.shw.plane.I1.nHits)), # if 0 is invalid, and 2 is positive and 2>1, go with 2              
+                  (((nhits0 & energy0)== False) & (energy1) & (self.data.shw.plane.I1.nHits>= self.data.shw.plane.I2.nHits)), # if 0 is invalid, and 1 is positive and 1>2, go with 1 
+                  ((self.data.shw.plane.I2.nHits==dummy) & (self.data.shw.plane.I1.nHits==dummy) & (self.data.shw.plane.I0.nHits==dummy))]
+      shw_choices = [ self.data.shw.plane.I2.energy,
+                      self.data.shw.plane.I1.energy,
+                      self.data.shw.plane.I0.energy,
+                      self.data.shw.plane.I1.energy,
+                      self.data.shw.plane.I0.energy,
+                      self.data.shw.plane.I2.energy,
+                      self.data.shw.plane.I0.energy,
+                      self.data.shw.plane.I2.energy,
+                      self.data.shw.plane.I1.energy,
+                      -1]
+      self.data.loc[:,panda_helpers.getcolumns(['shw.bestplane_energy'],depth=self.key_length())] = np.select(conditions, shw_choices, default = fill)

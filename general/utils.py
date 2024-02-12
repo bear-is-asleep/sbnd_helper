@@ -110,8 +110,8 @@ def get_sub_inds_from_inds(inds,sub_inds,length):
   """
   Get the indices of sub_inds that are in inds
   
-  inds: set of indices (bigger)
-  sub_inds: set of indices to check (smaller)
+  inds: set of indices (smaller)
+  sub_inds: set of indices to check (bigger)
   """
   inds = set(inds)
   sub_inds = set(sub_inds)

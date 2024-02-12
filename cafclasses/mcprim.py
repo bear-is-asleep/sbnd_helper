@@ -8,50 +8,52 @@ from sbnd.constants import *
 from sbnd.cafclasses.parent import CAF
 from sbnd.cafclasses.object_calc import *
 
-class MCPRIM(CAF):
-    def __init__(self,*args,prism_bins=None,momentum_bins=None,costheta_bins=None,**kwargs):
+class MCPrim(CAF):
+    def __init__(self,*args,momentum_bins=None,costheta_bins=None,**kwargs):
       super().__init__(*args,**kwargs)
       self.nu_inrange_df = None
-      self.set_prism_bins(prism_bins)
       self.set_momentum_bins(momentum_bins)
       self.set_costheta_bins(costheta_bins)
     @property
     def _constructor(self):
-        return MCPRIM
+        return MCPrim
     def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
-        return MCPRIM(data
+        return MCPrim(data
                       ,prism_bins=self.prism_binning
                       ,momentum_bins=self.momentum_binning
                       ,costheta_bins=self.costheta_binning
                       ,pot=self.pot)
     def copy(self, deep=True):
-        return MCPRIM(self.data.copy(deep)
+        return MCPrim(self.data.copy(deep)
                       ,prism_bins=self.prism_binning
                       ,momentum_bins=self.momentum_binning
                       ,costheta_bins=self.costheta_binning
                       ,pot=self.pot)
-    def postprocess(self,nu=None):
+    def postprocess(self,nu=None,drop_noninteracting=True):
       """
       Run all post processing
       """
       s0 = time()
       self.apply_nu_cuts(nu=nu) 
-      self.drop_noninteracting()
+      if drop_noninteracting:
+        self.drop_noninteracting()
       s1 = time()
       print(f'--apply cuts: {s1-s0:.2f} s')
       #self.drop_neutrinos() - this is taken care of by drop noninteracting
       self.add_fv()
       self.add_nu_dir()
+      self.add_nu_theta()
       self.add_theta()
       self.add_costheta()
       self.add_momentum_mag()
+      #self.add_tot_visE()
       self.add_genweight(nu=nu) #generator weights
       self.add_genmode(nu=nu) #generator modes
       s2 = time()
       print(f'--add variables: {s2-s1:.2f} s')
       #Assign binning
-      self.assign_prism_bins(nu=nu)
+      self.assign_prism_bins(nu=None) #use theta from incident location
       self.assign_costheta_bins()
       self.assign_momentum_bins()
       s3 = time()
@@ -64,11 +66,6 @@ class MCPRIM(CAF):
       inds = utils.get_inds_from_sub_inds(self.data.index.values,nu.data.index.values,nu_ind_depth)
       self.data = self.data.loc[inds]
       self.data.sort_index(inplace=True)
-    def set_prism_bins(self,prism_bins):
-      """
-      Set prism bins
-      """
-      self.prism_binning = prism_bins
     def set_momentum_bins(self,momentum_bins):
       """
       Set momentum bins
@@ -131,6 +128,18 @@ class MCPRIM(CAF):
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       self.data.loc[:,cols[0:3]] = get_neutrino_dir(self.data.start)
+    def add_nu_theta(self,convert_to_deg=True):
+      """
+      get neutrino angle (thus the prism bin) using it's direction
+      """
+      keys = [
+        'nu.theta'
+      ]
+      self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      self.data.loc[:,cols[0]] = np.arccos(self.data.nu.dir.z)
+      if convert_to_deg:
+        self.data.loc[:,cols[0]] = self.data.loc[:,cols[0]]*180/np.pi
     def add_theta(self,convert_to_deg=True):
       """
       add dir
@@ -208,9 +217,12 @@ class MCPRIM(CAF):
         'prism_bins'
       ]
       self.add_key(keys)
-      if not self.check_nu_inrange(nu=nu): return None
-      self.assign_bins(self.prism_binning,'theta',df_comp=self.nu_inrange_df,assign_key='prism_bins',low_to_high=True)
-      self.clear_nu_inrange()
+      if nu is not None:
+        if not self.check_nu_inrange(nu=nu): return None
+        self.assign_bins(self.prism_binning,'theta',df_comp=self.nu_inrange_df,assign_key='prism_bins',low_to_high=True)
+        self.clear_nu_inrange()
+      else:
+        self.assign_bins(self.prism_binning,'nu.theta',df_comp=None,assign_key='prism_bins',low_to_high=True)
     def assign_costheta_bins(self,costheta_bins=None):
       """
       Assign costheta bins to dataframe
@@ -288,15 +300,25 @@ class MCPRIM(CAF):
       #Sort indices
       self.data.loc[:,cols[0]] = self.nu_inrange_df.loc[nu_inds].theta
       self.clear_nu_inrange()
+    def add_tot_visE(self):
+      """
+      Add total visible energy - THIS IS MORE LIKE DEPOSITED ENERGY AND IT DOESN'T CHECK IF THE PARTICLE IS IN THE TPC
+      """
+      keys = [
+        'visE'
+      ]
+      self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      self.data.loc[:,cols[0]] = self.data.startE - self.data.endE
     def get_part_count(self,pdg=None):
       """
       Return the number of particles with pdg. 
       If no pdg specified return total number of particles
       """
       if pdg is None:
-        return np.sum(self.data.genweight)
+        return np.sum(self.data.nu.genweight)
       else:
-        return np.sum(self.data.genweight[self.data.pdg == pdg])
+        return np.sum(self.data.nu.genweight[self.data.pdg == pdg])
       
     
     

@@ -16,9 +16,9 @@ def get_neutrino_dir(start):
   """
   
   #Get the direction
-  neutrino_dir = np.array([start.x - prism_centroid[0],
-                          start.y - prism_centroid[1],
-                          start.z + distance_from_bnb])
+  neutrino_dir = np.array([start.x - PRISM_CENTROID[0],
+                          start.y - PRISM_CENTROID[1],
+                          start.z + DISTANCE_FROM_BNB])
   neutrino_dir /= np.linalg.norm(neutrino_dir,axis=0)
   
   return neutrino_dir.T
@@ -38,8 +38,9 @@ def get_theta(pfpdir,nudir):
   
   #Mask nan
   mask_nan = np.isnan(pfpdir).any(axis=1) | np.isnan(nudir).any(axis=1)
-  pfpdir_no_nan = pfpdir[~mask_nan]
-  nudir_no_nan = nudir[~mask_nan]
+  pfpdir_no_nan = np.array(pfpdir[~mask_nan],dtype=np.float32)
+  nudir_no_nan = np.array(nudir[~mask_nan],dtype=np.float32)
+  
   
   #Fill theta values
   theta[~mask_nan] = np.arccos(utils.numba_dot(pfpdir_no_nan, nudir_no_nan))

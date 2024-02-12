@@ -11,6 +11,7 @@ from sbnd.constants import *
 #PRISM info
 PRISM_CENTROID =  [-74.,0] #x,y [cm]
 DISTANCE_FROM_BNB = 110e2 #z [cm]
+PRISM_BINS = np.arange(0,1.8,0.2)
 
 
 def calc_rf(theta):

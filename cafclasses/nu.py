@@ -9,17 +9,11 @@ from sbnd.cafclasses.object_calc import *
 from sbnd.cafclasses.parent import CAF
 
 class NU(CAF):
-  def __init__(self,*args,prism_bins=None,**kwargs):
+  def __init__(self,*args,**kwargs):
     super().__init__(*args,**kwargs)
-    self.set_prism_bins(prism_bins)
   def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
         return NU(data)
-  def set_prism_bins(self,prism_bins):
-    """
-    Set prism bins
-    """
-    self.prism_binning = prism_bins
   def postprocess(self):
     """
     Run all post processing
@@ -29,25 +23,26 @@ class NU(CAF):
     self.add_nudir()
     self.add_theta()
     self.add_costheta()
-  def all_cuts(self):
+  def all_cuts(self,volume=FV):
     """
     Apply all cuts
     """
-    self.cut_av()
+    if volume == FV: self.cut_fv()
+    else: self.cut_av()
     self.cut_isnumucc()
     #return self #Return self since cuts cannot be made in place
-  def postprocess_and_cut(self):
+  def postprocess_and_cut(self,volume=FV):
     """
     Run all post processing and cuts in order to optimize timing
     """
     s0 = time()
     self.add_av()
+    self.add_fv()
     self.add_isnumucc()
     s1 = time()
     print(f'--add variables: {s1-s0:.2f} s')
     #Now cut
-    self.cut_av()
-    self.cut_isnumucc()
+    self.all_cuts(volume=volume)
     s2 = time()
     print(f'--cut variables: {s2-s1:.2f} s')
     #Now add rest of attributes
@@ -75,6 +70,22 @@ class NU(CAF):
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
     self.data.loc[:,cols[0]] = involume(self.data.position)
     return None
+  def add_fv(self):
+    """
+    Is it in the fiducial volume?
+    """
+    keys = [
+      'in_fv',
+    ]
+    self.add_key(keys)
+    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+    self.data.loc[:,cols[0]] = involume(self.data.position,volume=FV)
+  def cut_fv(self):
+    """
+    Cut to only in fv
+    """
+    self.data = self.data[self.data.in_fv]
+    
   def cut_av(self):
     """
     Cut to only in av
@@ -117,19 +128,6 @@ class NU(CAF):
     self.data.loc[:,cols[0]] = np.arccos(self.data.nu_dir.z)
     if convert_to_deg:
       self.data.loc[:,cols[0]] = self.data.loc[:,cols[0]]*180/np.pi #usefule for prism
-  def scale_to_pot(self,nom_pot,sample_pot=None):
-    """
-    Scale to nominal protons on target (POT). Need sample POT as input
-    """
-    if sample_pot is None: sample_pot = self.pot
-    assert sample_pot is not None, 'sample POT is None'
-    if not self.check_key('genweight'): #key not in dataframe
-      keys = ['genweight']
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
-    print(f'--scaling to POT: {sample_pot:.2e} -> {nom_pot:.2e}')
-    self.data.genweight = self.data.genweight*nom_pot/sample_pot
   def assign_prism_bins(self,prism_bins=None):
     """
     Assign prism bins to dataframe
