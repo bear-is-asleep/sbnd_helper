@@ -14,7 +14,7 @@ class PFP(CAF):
     super().__init__(*args,**kwargs)
     self.set_momentum_bins(momentum_bins)
     self.set_costheta_bins(costheta_bins)
-    self.clean([-5]) #set dummy values to nan, for some reason pandora uses -5??
+    #self.clean([-5]) #set dummy values to nan, for some reason pandora uses -5??
   @property
   def _constructor(self):
       return PFP
@@ -56,14 +56,14 @@ class PFP(CAF):
     self.nu_inrange_df = self.get_reference_df(nu)
   
   #-------------------- adders --------------------#
-  def add_pfp_semantics(self,method='naive'):
+  def add_pfp_semantics(self,method='naive',threshold=0.5):
     """
     classify each as shower or track
     """
     #naive method for now
     if method == 'naive':
-      is_trk = (self.data.trackScore < 0.5) & (self.data.trackScore >= 0)
-      is_shw = (self.data.trackScore >= 0.5) & (self.data.trackScore <= 1)
+      is_shw = (self.data.trackScore < threshold) & (self.data.trackScore >= 0)
+      is_trk = (self.data.trackScore >= threshold) & (self.data.trackScore <= 1)
     else:
       print(f'Method "{method}" not an option, choose from - "naive"')
       raise ValueError('Method not implemented')
@@ -77,7 +77,7 @@ class PFP(CAF):
     self.data.loc[is_shw,cols[0]] = 1
     self.data.loc[other,cols[0]] = -1
   
-  def add_reco_containment(self):
+  def add_containment(self):
     """
     Add containment 1 or 0 for each pfp
     """
@@ -94,7 +94,13 @@ class PFP(CAF):
     self.add_stat(get_err,'mae',normalize=True)
     self.add_stat(get_err,'dif',normalize=False)
   
-  def add_bestpdg(self,method='dazzle_best',include_other=False):
+  def add_bestpdg(self,method='dazzle_best',include_other=False
+                  ,length=25
+                  ,bdt_score=0.5
+                  ,chi2_muon=30
+                  ,chi2_proton=60 #cut on muon
+                  ,chi2_proton2=90 #cut on proton
+                  ,dedx=2.5):
     """
     https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=24747&filename=20220215_Mun%20Jung%20Jung.pdf&version=1
     Get best pdg for track and showers
@@ -112,21 +118,28 @@ class PFP(CAF):
       is_electron = (self.data.shw.razzle.pdg == 11) & is_shw
       is_photon = (self.data.shw.razzle.pdg == 22) & is_shw
     elif method == 'dazzle': #can tune the values
-      is_muon = (self.data.trk.dazzle.muonScore > 0.6) & is_trk
-      is_proton = (self.data.trk.dazzle.protonScore > 0.6) & is_trk
-      is_pion = (self.data.trk.dazzle.pionScore > 0.6) & is_trk
-      is_electron = (self.data.shw.razzle.electronScore > 0.6) & is_shw
-      is_photon = (self.data.shw.razzle.photonScore > 0.6) & is_shw
+      is_muon = (self.data.trk.dazzle.muonScore > bdt_score) & is_trk
+      is_proton = (self.data.trk.dazzle.protonScore > bdt_score) & is_trk
+      is_pion = (self.data.trk.dazzle.pionScore > bdt_score) & is_trk
+      is_electron = (self.data.shw.razzle.electronScore > bdt_score) & is_shw
+      is_photon = (self.data.shw.razzle.photonScore > bdt_score) & is_shw
     elif method == 'x2': #can tune values
-      is_muon = (self.data.trk.len > 50) \
-            & (self.data.trk.chi2pid.I2.chi2_muon < 25) \
-            & (self.data.trk.chi2pid.I2.chi2_proton > 70) \
+      print('Assigning pdg using x2 method : ')
+      print(f'length: {length:.2f}')
+      print(f'chi2_muon: {chi2_muon:.2f}')
+      print(f'chi2_proton: {chi2_proton:.2f} (cut on muon)')
+      print(f'chi2_proton2: {chi2_proton2:.2f} (cut on proton)')
+      print(f'dedx: {dedx:.2f}')
+      
+      is_muon = (self.data.trk.len > length) \
+            & (self.data.trk.chi2pid.I2.chi2_muon < chi2_muon) \
+            & (self.data.trk.chi2pid.I2.chi2_proton > chi2_proton) \
             & is_trk
-      is_proton = (self.data.trk.chi2pid.I2.chi2_proton < 90) & is_trk
+      is_proton = (self.data.trk.chi2pid.I2.chi2_proton < chi2_proton2) & is_trk
       is_pion = ~is_muon & ~is_proton & is_trk \
         & (~self.data.trk.chi2pid.I2.isna().all(axis=1)) #not all NAN
       #naive estimate using dedx https://arxiv.org/pdf/1610.04102.pdf fig 9
-      is_electron = (self.data.shw.bestplane_dEdx < 2.5) & is_shw
+      is_electron = (self.data.shw.bestplane_dEdx < dedx) & is_shw
       is_photon = ~is_electron & is_shw \
         & (~self.data.shw.bestplane_dEdx.isna()) #not all NAN
     
@@ -146,7 +159,7 @@ class PFP(CAF):
     self.data.loc[is_electron,cols[0]] = 11
     self.data.loc[is_photon,cols[0]] = 22
   
-  def add_trk_bestenergy(self,method='dazzle_best'):
+  def add_trk_bestenergy(self):
     """
     Get best energy for track
     """
@@ -331,6 +344,25 @@ class PFP(CAF):
   
 
   #-------------------- getters --------------------#
+  def get_best_muon(self,method='energy'):
+    """
+    Return best muon
+    """
+    pfp_muon = self.get_parts_from_pdg(13,remove_nan=True,use_reco=True)
+    if method == 'energy':
+      best_muon = pfp_muon.data.groupby(level=[0,1,2]).apply(lambda x: x.loc[x.trk.bestenergy.idxmax()])
+    elif method == 'length':
+      best_muon = pfp_muon.data.groupby(level=[0,1,2]).apply(lambda x: x.loc[x.trk.len.idxmax()])
+    else:
+      print(f'Method "{method}" not an option, choose from - "energy","length"')
+      raise ValueError('Method not implemented')
+    return PFP(best_muon
+               ,prism_bins=self.prism_binning
+               ,momentum_bins=self.momentum_binning
+               ,costheta_bins=self.costheta_binning
+               ,pot=self.pot)
+    
+  
   def get_particles(self,pdgs,remove_nan=True,use_reco=False,**dropna_args):
     """
     Return list of particles from list of pdgs
@@ -435,3 +467,11 @@ class PFP(CAF):
                       self.data.shw.plane.I1.energy,
                       -1]
       self.data.loc[:,panda_helpers.getcolumns(['shw.bestplane_energy'],depth=self.key_length())] = np.select(conditions, shw_choices, default = fill)
+  #-------------------- cutters --------------------#
+  def apply_cut(self,slc,key):
+      """
+      Cut pfp from the slc based on the key
+      """
+      _slc = slc.copy()
+      _slc.apply_cut(key)
+      self.data = _slc.get_reference_df(self)

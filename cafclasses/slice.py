@@ -25,10 +25,19 @@ class CAFSlice(CAF):
       df = pd.read_hdf(fname,key=key,**kwargs)
       return CAFSlice(df,**kwargs)
     #-------------------- cutters --------------------#
+    def apply_cut(self,key):
+      """
+      Cut the data based on key
+      """
+      self.check_key(key) #check if key exists
+      self.data = self.data[self.data.cut.loc[:,key]]
     def cut_has_nuscore(self,cut=True):
       """
       Cut those that don't have a nu score. They didn't get any reco
       """
+      if cut and self.check_key('cut.has_score'):
+        self.data = self.data[self.data.cut.has_nuscore]
+        return
       keys = [
         'cut.has_nuscore'
       ]
@@ -42,12 +51,17 @@ class CAFSlice(CAF):
       """
       Cut to only cosmic tracks
       """
+      if self.check_key('cut.cosmic'):
+        self.data = self.data[self.data.cut.cosmic]
+        return
       slc_df = self.data[self.data.is_clear_cosmic != 1] #removed from nu score = -1
       if crumbs_score is not None:
         slc_df = slc_df[slc_df.crumbs_result.bestscore > crumbs_score]
       if fmatch_score is not None:
+        print(f'fmatch score = {fmatch_score}')
         slc_df = slc_df[slc_df.fmatch.score < fmatch_score]
       if nu_score is not None:
+        print(f'nu score = {nu_score}')
         slc_df = slc_df[slc_df.nu_score > nu_score]
       inds = slc_df.index.values
       #add the boolean to the data
@@ -59,11 +73,14 @@ class CAFSlice(CAF):
       self.data.loc[:,cols[0]] = False
       self.data.loc[inds,cols[0]] = True
       if cut:
-        self.data = self.data[self.data.cuts.cosmic]
+        self.data = self.data[self.data.cut.cosmic]
     def cut_fv(self,volume=FV,cut=False):
       """
       Cut to only in fv
       """
+      if cut and self.check_key('cut.fv') and self.check_key('truth.fv'):
+        self.data = self.data[self.data.cut.fv]
+        return
       keys = [
         'cut.fv',
         'truth.fv' #truth fv but not really a cut
@@ -73,11 +90,14 @@ class CAFSlice(CAF):
       self.data.loc[:,cols[0]] = involume(self.data.vertex, volume=volume) #based on pandora vertex
       self.data.loc[:,cols[1]] = involume(self.data.truth.position,volume=volume) #based on true vertex
       if cut: #add handle to cut on truth??
-        self.data = self.data[self.data.cuts.fv]
+        self.data = self.data[self.data.cut.fv]
     def cut_muon(self,cut=False):
       """
       Cut to only muon
       """
+      if cut and self.check_key('cut.has_muon'):
+        self.data = self.data[self.data.cut.has_muon]
+        return
       keys = [
         'cut.has_muon'
       ]
@@ -85,11 +105,14 @@ class CAFSlice(CAF):
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       self.data.loc[:,cols[0]] = self.data.has_muon
       if cut:
-        self.data = self.data[self.data.cuts.muon]
+        self.data = self.data[self.data.cut.has_muon]
     def cut_trk(self,cut=False):
       """
       Cut to only tracks
       """
+      if cut and self.check_key('cut.trk'):
+        self.data = self.data[self.data.cut.trk]
+        return
       keys = [
         'cut.trk'
       ]
@@ -97,11 +120,14 @@ class CAFSlice(CAF):
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       self.data.loc[:,cols[0]] = self.data.has_trk
       if cut:
-        self.data = self.data[self.data.cuts.trk]
+        self.data = self.data[self.data.cut.trk]
     def cut_all(self,cut=False):
       """
       add a column that is true if all cuts are true
       """
+      if cut and self.check_key('cut.total'):
+        self.data = self.data[self.data.cut.total]
+        return
       keys = [
         'cut.total'
       ]
@@ -112,7 +138,7 @@ class CAFSlice(CAF):
         & self.data.cut.cosmic\
         & self.data.cut.has_muon
       if cut:
-        self.data = self.data[self.data.cuts.all]
+        self.data = self.data[self.data.cut.total]
     #-------------------- adders --------------------#
     def add_has_muon(self,pfp):
       """
@@ -136,13 +162,16 @@ class CAFSlice(CAF):
       #has to be a track to be a muon (for now)
       trks = pfp.data[pfp.data.semantic_type == 0]
       inds = utils.get_sub_inds_from_inds(trks.index.values,self.data.index.values,self.index_depth)
+      best_trk_score = pfp.data.groupby(level=[0,1,2]).trackScore.max()
       #now add the boolean to the data
       keys = [
-        'has_trk'
+        'has_trk',
+        'best_trk_score'
       ]
       self.add_key(keys,fill=False)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       self.data.loc[inds,cols[0]] = True
+      self.data.loc[inds,cols[1]] = best_trk_score
     def add_in_av(self):
       """
       Add containment 1 or 0 for each pfp
@@ -195,6 +224,35 @@ class CAFSlice(CAF):
       self.data.loc[inds,cols[3]] = true_shw_counts
       self.data.loc[inds,cols[4]] = true_trk_counts
       self.data.loc[inds,cols[5]] = true_shw_counts + true_trk_counts
+      
+    def add_pdg_counts(self,pfp):
+      """
+      Count the number of each type of particle by pdg
+      """
+      #Find number of each pdg per slice
+      reco = pfp.data.bestpdg.groupby(level=[0,1,2]).value_counts().unstack()
+      reco = reco.fillna(0)
+      reco.columns = [f'reco.pdg_{i:.0f}' for i in reco.columns]
+      inds = reco.index.values
+      
+      #Add to slice
+      keys = list(reco.columns)
+      self.add_key(keys,fill=0)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      self.data.loc[inds,cols] = reco.values
+      
+      #Find true number of each pdg per slice
+      true = abs(pfp.data.trk.truth.p.pdg).groupby(level=[0,1,2]).value_counts().unstack()
+      true = true.fillna(0)
+      true.columns = [f'truth.pdg_{i:.0f}' for i in true.columns]
+      inds = true.index.values
+      
+      #Add to slice
+      keys = list(true.columns)
+      self.add_key(keys,fill=0)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      self.data.loc[inds,cols] = true.values
+    
     def add_tot_visE(self):
       """
       Find total visible energy
@@ -244,6 +302,93 @@ class CAFSlice(CAF):
       self.data.loc[iscosmic,cols[0]] = 3 #cosmic
       self.data.loc[isdirt,cols[0]] = 4 #dirt
       #the rest are unknown
+    
+    def add_best_muon(self,pfp,get_best_muon=True,method='energy'):
+      """
+      Add the best muon to the slice
+      """
+      #Get the best muon if requested
+      if get_best_muon:
+        pfp = pfp.get_best_muon(method=method)
+      #Get slice indices in common
+      inds = utils.get_sub_inds_from_inds(pfp.data.index.values,self.data.index.values,self.index_depth)
+      
+      #Add to slice
+      keys = [
+        'best_muon.energy',
+        'best_muon.p',
+        'best_muon.theta',
+        'best_muon.costheta',
+        'best_muon.dir.x',
+        'best_muon.dir.y',
+        'best_muon.dir.z',
+        'best_muon.len',
+        'best_muon.cont_tpc',
+        'best_muon.start.x',
+        'best_muon.start.y',
+        'best_muon.start.z',
+        'best_muon.end.x',
+        'best_muon.end.y',
+        'best_muon.end.z',
+        'best_muon.truth.p.pdg',
+        'best_muon.truth.p.startE',
+        'best_muon.truth.p.endE',
+        'best_muon.truth.p.start.x',
+        'best_muon.truth.p.start.y',
+        'best_muon.truth.p.start.z',
+        'best_muon.truth.p.end.x',
+        'best_muon.truth.p.end.y',
+        'best_muon.truth.p.end.z',
+        'best_muon.truth.p.start_process',
+        'best_muon.truth.p.end_process',
+        'best_muon.truth.p.theta',
+        'best_muon.truth.p.costheta',
+        'best_muon.truth.p.cont_tpc',
+        'best_muon.truth.p.genp.x',
+        'best_muon.truth.p.genp.y',
+        'best_muon.truth.p.genp.z',
+        'best_muon.truth.p.genp.tot',
+        
+      ]
+      self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      
+      #add the best muon to the slice
+      self.data.loc[inds,cols[0]] = pfp.data.trk.bestenergy
+      self.data.loc[inds,cols[1]] = pfp.data.trk.bestmom
+      self.data.loc[inds,cols[2]] = pfp.data.trk.theta
+      self.data.loc[inds,cols[3]] = np.cos(pfp.data.trk.theta)
+      self.data.loc[inds,cols[4]] = pfp.data.trk.dir.x
+      self.data.loc[inds,cols[5]] = pfp.data.trk.dir.y
+      self.data.loc[inds,cols[6]] = pfp.data.trk.dir.z
+      self.data.loc[inds,cols[7]] = pfp.data.trk.len
+      self.data.loc[inds,cols[8]] = pfp.data.trk.cont_tpc
+      self.data.loc[inds,cols[9]] = pfp.data.trk.start.x
+      self.data.loc[inds,cols[10]] = pfp.data.trk.start.y
+      self.data.loc[inds,cols[11]] = pfp.data.trk.start.z
+      self.data.loc[inds,cols[12]] = pfp.data.trk.end.x
+      self.data.loc[inds,cols[13]] = pfp.data.trk.end.y
+      self.data.loc[inds,cols[14]] = pfp.data.trk.end.z
+      self.data.loc[inds,cols[15]] = pfp.data.trk.truth.p.pdg
+      self.data.loc[inds,cols[16]] = pfp.data.trk.truth.p.startE
+      self.data.loc[inds,cols[17]] = pfp.data.trk.truth.p.endE
+      self.data.loc[inds,cols[18]] = pfp.data.trk.truth.p.start.x
+      self.data.loc[inds,cols[19]] = pfp.data.trk.truth.p.start.y
+      self.data.loc[inds,cols[20]] = pfp.data.trk.truth.p.start.z
+      self.data.loc[inds,cols[21]] = pfp.data.trk.truth.p.end.x
+      self.data.loc[inds,cols[22]] = pfp.data.trk.truth.p.end.y
+      self.data.loc[inds,cols[23]] = pfp.data.trk.truth.p.end.z
+      self.data.loc[inds,cols[24]] = pfp.data.trk.truth.p.start_process
+      self.data.loc[inds,cols[25]] = pfp.data.trk.truth.p.end_process
+      self.data.loc[inds,cols[26]] = pfp.data.trk.truth.p.theta
+      self.data.loc[inds,cols[27]] = np.cos(pfp.data.trk.truth.p.theta)
+      self.data.loc[inds,cols[28]] = pfp.data.trk.truth.p.cont_tpc
+      self.data.loc[inds,cols[29]] = pfp.data.trk.truth.p.genp.x
+      self.data.loc[inds,cols[30]] = pfp.data.trk.truth.p.genp.y
+      self.data.loc[inds,cols[31]] = pfp.data.trk.truth.p.genp.z
+      self.data.loc[inds,cols[32]] = np.sqrt(np.sum(pfp.data.trk.truth.p.genp**2,axis=1))
+      
+      
       
     #-------------------- assigners --------------------#
     #-------------------- getters --------------------#
@@ -254,6 +399,15 @@ class CAFSlice(CAF):
       if self.check_key('genweight'):
         return self.data.genweight.sum()
       raise ValueError('genweight not in dataframe. Run scale_to_pot first')
+    def get_roc(self,key,truth_type=0):
+      """
+      Get roc curve from a cut
+      """
+      if 'cut.' not in cut: cut = 'cut.'+cut #add prefix if not there
+      tpr = self.get_tpr(cut,truth_type)
+      fpr = self.get_fpr(cut,truth_type)
+      return tpr,fpr
+      
     def get_pur_eff_f1(self,cuts=[]):
       """
       Get purity, efficiency, and f1 score from list of cuts applied
@@ -273,6 +427,7 @@ class CAFSlice(CAF):
       init_signal = slc_cut_df[slc_cut_df.truth.event_type == 0].genweight.sum() #initial number of events
       
       pur[0] = init_signal/slc_cut_df.genweight.sum()
+      eff[0] = 1
       f1[0] = 1
       
       if len(cuts) != 0:
@@ -284,7 +439,15 @@ class CAFSlice(CAF):
           eff[i+1] = slc_cut_df[slc_cut_df.truth.event_type == 0].genweight.sum()/init_signal
           f1[i+1] = 2*eff[i+1]*pur[i+1]/(eff[i+1]+pur[i+1])
       return pur,eff,f1
-        
+    def get_events_cuts(self,cuts=[]):
+      """
+      Get number of events from list of cuts applied
+      
+      returns list of events for each cut in order
+      """
+      pass
+       
+       
         
       
       

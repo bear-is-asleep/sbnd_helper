@@ -115,11 +115,11 @@ GIBUU_INTERACTION_MAP.update({i:'Res (s=0)' for i in range(2,32)})
 #Event types
 EVENT_TYPE_LIST= {
   -1 : ["Unknown","unk","black"],
-  0 : [r"$\nu_\mu$ CC","numucc","gold"],
-  1 : [r"$\nu$ NC","nc","g"],
-  2 : [r"$\nu_e$ CC","nuecc","blue"],
+  0 : [r"$\nu_\mu$ CC","numucc","goldenrod"],
+  1 : [r"$\nu$ NC","nc","darkgreen"],
+  2 : [r"$\nu_e$ CC","nuecc","navy"],
   3 : ["Cosmic","cosmic","red"],
-  4 : ["Dirt","dirt","brown"],
+  4 : [r"Non AV $\nu$","dirt","sienna"],
 }
 
 #Semantic types for pandora
@@ -127,5 +127,17 @@ SEMANITC_TYPE_MAP = {
   -1 : "Unknown", #probably cosmic
   0 : "Track",
   1 : "Shower"
+}
+
+#PDGs
+PID_PDG_MAP = {
+  0 : "unknown",
+  11 : "electron",
+  13 : "muon",
+  22 : "photon",
+  111 : "pi0",
+  211 : "pi",
+  2112 : "neutron",
+  2212 : "proton",
 }
   

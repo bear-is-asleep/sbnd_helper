@@ -7,6 +7,8 @@ from datetime import date
 import matplotlib.pyplot as plt
 import shutil
 from pathlib import Path
+from matplotlib.colors import to_rgb, to_hex
+import numpy as np
 
 day = date.today().strftime("%Y_%m_%d")
 
@@ -143,3 +145,16 @@ def get_colors(cmap, n):
     cmap = plt.get_cmap(cmap)
     colors = [cmap(i/n) for i in range(n)]
     return colors
+  
+def convert_list_of_colors_to_hex(colors):
+    return [mcolors.to_hex(c) for c in colors]
+
+def darken_color(color, factor=0.7):
+    """
+    Darkens the given color by multiplying the RGB values by the specified factor.
+    """
+    rgb = np.array(to_rgb(color))
+    darkened_rgb = rgb * factor
+    # Ensure RGB values are within the valid range [0, 1]
+    darkened_rgb = np.clip(darkened_rgb, 0, 1)
+    return to_hex(darkened_rgb)

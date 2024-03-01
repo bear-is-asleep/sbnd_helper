@@ -20,7 +20,9 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
   if colors is None:
     colors = cm.get_cmap(cmap, len(labels))
     colors = [list(colors(i)) for i in range(len(labels))]
-  ax.hist(series,label=legend_labels,color=colors,weights=weights,**pltkwargs)
+  #edgecolors = [plotters.darken_color(c,factor=0.5) for c in colors]
+  #for s, c, e, w, l in zip(series, colors, edgecolors, weights, legend_labels):
+  ax.hist(series, label=legend_labels, color=colors, weights=weights, **pltkwargs)
   ax.set_xlabel(xlabel)
   if title is not None:
     ax.set_title(title)
@@ -90,6 +92,8 @@ def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
       else:
           e = None
   return h,e
+
+#TODO: Move this to neutrino class?
 def make_mode_plots(nu_df,mode_map,weights=None,ylabel='Events',bins=np.arange(0,5.1,0.1),density=False,title=None,
                     ax=None,fig=None,**pltkwargs):
   norm = len(nu_df)/np.sum(nu_df.genweight.values)
@@ -142,4 +146,3 @@ def make_mode_plots(nu_df,mode_map,weights=None,ylabel='Events',bins=np.arange(0
   if ylabel is not None:
     ax.set_ylabel(f'{ylabel} / {round((bins[1]-bins[0])*1e3):,} MeV')
   return fig,ax  
-  
