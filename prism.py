@@ -23,9 +23,11 @@ def make_prism_rings(theta,ax,**pltkwargs):
   radius = calc_rf(theta)
   [ax.add_patch(Circle(center,radius=r1,**pltkwargs)) for r1 in radius]
   return ax
-def make_prism_plot(nu_df,**pltkwargs):
+def make_prism_plot(pos_df,weights=None,**pltkwargs):
+  if weights is None:
+    weights = np.ones(len(pos_df))
   fig,ax = plt.subplots(figsize=(10,8))
-  im = ax.hist2d(nu_df.position.x,nu_df.position.y,**pltkwargs)#,norm=colors.LogNorm())
+  im = ax.hist2d(pos_df.x,pos_df.y,weights=weights,**pltkwargs)#,norm=colors.LogNorm())
   cbar = fig.colorbar(im[3],ax=ax)
   cbar.ax.tick_params(labelsize=16)
   
@@ -36,7 +38,7 @@ def make_prism_plot(nu_df,**pltkwargs):
   
   ax.set_xlabel('x [cm]')
   ax.set_ylabel('y [cm]')
-  ax.set_title(rf'{round(np.sum(nu_df.genweight.values)):,} $\nu_\mu CC$ events')
+  ax.set_title(rf'{round(np.sum(weights)):,} $\nu_\mu CC$ events')
   return fig,ax
 
 def calc_prism_area(r1,r2,n=int(1e7),return_ring_area=False,show_plot=False):

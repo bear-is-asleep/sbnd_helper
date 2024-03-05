@@ -203,6 +203,7 @@ class PFP(CAF):
       'shw.truth.p.nudir.x','shw.truth.p.nudir.y','shw.truth.p.nudir.z',
       'trk.nudir.x','trk.nudir.y','trk.nudir.z',
       'trk.truth.p.nudir.x','trk.truth.p.nudir.y','trk.truth.p.nudir.z',
+      'shw.prism_theta','shw.truth.p.prism_theta','trk.prism_theta','trk.truth.p.prism_theta',
     ]
     self.add_key(keys)
     cols = panda_helpers.getcolumns(keys,depth=self.key_length())
@@ -210,6 +211,10 @@ class PFP(CAF):
     self.data.loc[:,cols[3:6]]= get_neutrino_dir(self.data.shw.truth.p.start)
     self.data.loc[:,cols[6:9]] = get_neutrino_dir(self.data.trk.start)
     self.data.loc[:,cols[9:12]] = get_neutrino_dir(self.data.trk.truth.p.start)
+    self.data.loc[:,cols[12]] = np.arccos(self.data.shw.nudir.z)*180/np.pi
+    self.data.loc[:,cols[13]] = np.arccos(self.data.shw.truth.p.nudir.z)*180/np.pi
+    self.data.loc[:,cols[14]] = np.arccos(self.data.trk.nudir.z)*180/np.pi
+    self.data.loc[:,cols[15]] = np.arccos(self.data.trk.truth.p.nudir.z)*180/np.pi
   
   def add_theta(self):
     """
@@ -301,7 +306,7 @@ class PFP(CAF):
     self.data[self.data.trk.stat.isna().any(axis=1)].trk.stat = np.nan
     self.data[self.data.shw.stat.isna().any(axis=1)].shw.stat = np.nan
   
-  def assign_costheta_bins(self,costheta_bins=None):
+  def assign_costheta_bins(self,key='costheta',assign_key='costheta_bin',costheta_bins=None):
     """
     Assign costheta bins to dataframe
     
@@ -309,11 +314,12 @@ class PFP(CAF):
     """
     if costheta_bins is not None: self.set_costheta_bins(costheta_bins=costheta_bins)
     keys = [
-      'costheta_bins'
+      key
     ]
-    self.add_key(keys)
-    self.assign_bins(self.costheta_binning,'costheta',df_comp=None,assign_key='costheta_bins',low_to_high=True)
-  def assign_momentum_bins(self,momentum_bins=None):
+    self.check_key(key)
+    #self.add_key(keys)
+    self.assign_bins(self.costheta_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
+  def assign_momentum_bins(self,key='p',assign_key='momentum_bin',momentum_bins=None):
     """
     Assign momentum bins to dataframe
     
@@ -321,10 +327,24 @@ class PFP(CAF):
     """
     if momentum_bins is not None: self.set_momentum_bins(momentum_bins=momentum_bins)
     keys = [
-      'momentum_bins'
+      key
     ]
-    self.add_key(keys)
-    self.assign_bins(self.momentum_binning,'genp.tot',df_comp=None,assign_key='momentum_bins',low_to_high=True)
+    self.check_key(key)
+    #self.add_key(keys)
+    self.assign_bins(self.momentum_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
+  def assign_prism_bins(self,key='prism_theta',assign_key='prism_bin',prism_bins=None):
+    """
+    Assign prism bins to dataframe
+    
+    prism_bins: prism bins set 
+    """
+    if prism_bins is not None: self.set_prism_bins(prism_bins=prism_bins)
+    keys = [
+      key
+    ]
+    self.check_key(key)
+    #self.add_key(keys)
+    self.assign_bins(self.prism_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
   
   def postprocess(self,fill=np.nan,dummy=np.nan,method_sem='naive',method_pdg='x2'):
     """

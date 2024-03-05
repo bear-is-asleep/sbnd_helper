@@ -122,6 +122,8 @@ EVENT_TYPE_LIST= {
   4 : [r"Non AV $\nu$","dirt","sienna"],
 }
 
+EVENT_NAMES = [i[0] for i in EVENT_TYPE_LIST.values()]
+
 #Semantic types for pandora
 SEMANITC_TYPE_MAP = {
   -1 : "Unknown", #probably cosmic

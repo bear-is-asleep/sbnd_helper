@@ -132,6 +132,11 @@ class CAF:
       """
       if df_comp is None: df_comp = self.copy()
       return object_calc.split_df_into_bins(self.data,df_comp.data,bins,key,low_to_high=low_to_high)
+    def get_key(self,key):
+      """
+      Converts key to tuple format
+      """
+      return panda_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
     #-------------------- cleaners --------------------#
     def clean(self,dummy_vals=[-9999,-999,999,9999],fill=np.nan):
       """
@@ -149,7 +154,7 @@ class CAF:
       """
       check if a key is in the dataframe
       """
-      col_key = panda_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
+      col_key = self.get_key(key)
       if col_key[0] in self.data.columns:
         return True
       return False

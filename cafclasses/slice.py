@@ -348,6 +348,8 @@ class CAFSlice(CAF):
         'best_muon.truth.p.genp.y',
         'best_muon.truth.p.genp.z',
         'best_muon.truth.p.genp.tot',
+        'best_muon.prism_theta',
+        'best_muon.truth.p.prism_theta',
         
       ]
       self.add_key(keys)
@@ -387,7 +389,8 @@ class CAFSlice(CAF):
       self.data.loc[inds,cols[30]] = pfp.data.trk.truth.p.genp.y
       self.data.loc[inds,cols[31]] = pfp.data.trk.truth.p.genp.z
       self.data.loc[inds,cols[32]] = np.sqrt(np.sum(pfp.data.trk.truth.p.genp**2,axis=1))
-      
+      self.data.loc[inds,cols[33]] = pfp.data.trk.prism_theta #prism theta
+      self.data.loc[inds,cols[34]] = pfp.data.trk.truth.p.prism_theta #prism theta 
       
       
     #-------------------- assigners --------------------#
@@ -439,13 +442,31 @@ class CAFSlice(CAF):
           eff[i+1] = slc_cut_df[slc_cut_df.truth.event_type == 0].genweight.sum()/init_signal
           f1[i+1] = 2*eff[i+1]*pur[i+1]/(eff[i+1]+pur[i+1])
       return pur,eff,f1
-    def get_events_cuts(self,cuts=[]):
+    def get_events_cuts(self,cuts=[],normalize=True):
       """
       Get number of events from list of cuts applied
       
-      returns list of events for each cut in order
+      returns dictionary of events for each cut in order
       """
-      pass
+      if 'precut' not in cuts: cuts = ['precut']+cuts #add precut if not there 
+      _slc = self.copy()
+      et_key = self.get_key('truth.event_type')
+      precut_events = _slc.data.groupby(et_key).genweight.sum().to_dict()
+      events = dict({c:precut_events for c in cuts})
+      for i,c in enumerate(cuts):
+        if i == 0: continue #skip precut
+        _slc.apply_cut(c)
+        events[c] = _slc.data.groupby(et_key).genweight.sum().to_dict()
+      df = pd.DataFrame(events).T
+      df.index.name = 'cut'
+      df = df.reindex(cuts)
+      df = df.reindex(sorted(df.columns), axis=1)
+      df.fillna(0,inplace=True)
+      if normalize:
+        df = df.div(df.sum(axis=1), axis=0)
+      return df
+    #-------------------- plotters --------------------#
+      
        
        
         

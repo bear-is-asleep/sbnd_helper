@@ -3,6 +3,7 @@ import matplotlib.cm as cm
 from sbnd.general import utils
 from sbnd.general import plotters
 import numpy as np
+from matplotlib.colors import LogNorm
 
 day = plotters.day
 
@@ -30,11 +31,16 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
   return fig,ax
 
 def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,label_boxes=False,
-                **pltkwargs):
+                colorbar=False,ax=None,fig=None,**pltkwargs):
   """
   x,y are pd.Series
   """
-  fig,ax = plt.subplots(figsize=(6,6),tight_layout=True)
+  if fig is None and ax is None: #Make figure if not provided
+    fig,ax = plt.subplots(figsize=(6,6),tight_layout=True)
+  elif fig is None:
+    fig = plt.gcf()
+  elif ax is None:
+    ax = fig.gca()
 
   if plot_line:
     lower = np.min([0,min(x),min(y)])
@@ -43,20 +49,59 @@ def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,
     ax.plot(xy,xy,ls='--',color='red')
     ax.set_xlim([lower,upper])
     ax.set_ylim([lower,upper])
-    hist,xbins,ybins,im = ax.hist2d(x,y,range=[xy,xy],**pltkwargs)
+    hist,xbins,ybins,im = ax.hist2d(x,y,range=[xy,xy],cmap=cmap,**pltkwargs)
   else:
-    hist,xbins,ybins,im = ax.hist2d(x,y,**pltkwargs)
+    hist,xbins,ybins,im = ax.hist2d(x,y,cmap=cmap,**pltkwargs)
   if label_boxes:
     for i in range(len(ybins)-1):
       for j in range(len(xbins)-1):
         ax.text(xbins[j]+0.5,ybins[i]+0.5, f'{hist.T[i,j]:.0f}', 
                 color="w", ha="center", va="center", fontweight="bold",fontsize=16)
+  if colorbar:
+    fig.colorbar(im, ax=ax)
   ax.set_xlabel(f'{xlabel}')
   ax.set_ylabel(f'{ylabel}')
   if title is not None:
     ax.set_title(title)
   plotters.set_style(ax)
   return fig,ax
+
+def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,label_boxes=False,
+                         colorbar=False,normalize=False,**pltkwargs):
+  """
+  x,y are pd.Series
+  assume y is the true var
+  """
+  fig,(ax,ax2) = plt.subplots(2,1,figsize=(6,7),tight_layout=True,sharex=True,gridspec_kw={'height_ratios': [6, 1]})
+  if 'bins' in pltkwargs:
+    bins = pltkwargs['bins']
+  else:
+    raise ValueError('bins must be provided')
+  bin_centers = (bins[1:] + bins[:-1])/2
+  bias = np.zeros(len(bins)-1)
+  err = np.zeros(len(bins)-1)
+  for i in range(len(bins)-1):
+    in_range = (x > bins[i]) & (x < bins[i+1])
+    _x = x[in_range]
+    _y = y[in_range]
+    if normalize:
+      statistic = (_x-_y)/_y
+    else:
+      statistic = _x-_y
+    bias[i] = np.mean(statistic)
+    err[i] = np.std(statistic)
+  ax2.errorbar(bin_centers,bias,yerr=err,fmt='o',color='black')
+  ax2.axhline(0,ls='--',color='red')
+  ax2.set_xlabel(xlabel)
+  if normalize:
+    ax2.set_ylabel('Fractional Error')
+  else:
+    ax2.set_ylabel('Bias')
+  fig,ax = plot_hist2d(x,y,xlabel='',ylabel=ylabel,title=title,cmap=cmap,plot_line=plot_line,label_boxes=label_boxes,colorbar=colorbar
+                    ,fig=fig,ax=ax,**pltkwargs)
+  plotters.set_style(ax2)
+  return fig,(ax,ax2)
+    
 
 def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
   """
