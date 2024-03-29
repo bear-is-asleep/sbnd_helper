@@ -39,16 +39,6 @@ class PFP(CAF):
     pfp = PFP(df,**kwargs)
     return pfp
   #-------------------- setters --------------------#
-  def set_momentum_bins(self,momentum_bins):
-    """
-    Set momentum bins
-    """
-    self.momentum_binning = momentum_bins
-  def set_costheta_bins(self,costheta_bins):
-    """
-    Set costtheta bins
-    """
-    self.costheta_binning = costheta_bins
   def set_nu_inrange(self,nu):
     """
     Get neutrino in current indices

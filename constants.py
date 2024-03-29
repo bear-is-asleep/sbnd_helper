@@ -1,5 +1,6 @@
 import numpy as np
-NOM_POT = 10e20
+from .volume import FV
+NOM_POT = 0.6e20
 
 #SBND volume
 FACE_AREA = 400**2 #cm^2
@@ -10,7 +11,14 @@ AVOGADRO_CONSTANT = 6.02214076e23 #mol^-1
 ARGON_MOLAR_MASS = 39.95 #g/mol
 ARGON_DENSITY = ARGON_MASS_DENSITY/ARGON_MOLAR_MASS*AVOGADRO_CONSTANT #n_argon/cm^3
 NUMBER_TARGETS = ARGON_DENSITY*SBND_VOLUME #Number of argon targets in active volume
+FV_VOLUME = np.prod([i[1]-i[0] for i in FV]) #cm^3
+NUMBER_TARGETS_FV = ARGON_DENSITY*FV_VOLUME #Number of argon targets in fiducial volume
+#NUMBER_TARGETS_FV = 4.6468e31 #https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=35364&filename=NC%26%23960%3B0%20Analysis%20Update%20-%20Physics%20Meeting%2014th%20March.pdf&version=1
 
+#Flux constants
+INTEGRATED_FLUX = 1.664e13 #cm^-2 https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=35364&filename=NC%26%23960%3B0%20Analysis%20Update%20-%20Physics%20Meeting%2014th%20March.pdf&version=1
+FRAC_NUMU = 0.936 #https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=35609&filename=NuINT%202024%20practice%20talk.pdf
+NUMU_INTEGRATED_FLUX = INTEGRATED_FLUX*FRAC_NUMU #cm^-2
 
 GeV2perm2 = 2.56819e31 #GeV^2 to m^2
 GeV2percm2 = GeV2perm2*1e-4 #GeV^2 to cm^2
@@ -123,6 +131,9 @@ EVENT_TYPE_LIST= {
 }
 
 EVENT_NAMES = [i[0] for i in EVENT_TYPE_LIST.values()]
+EVENT_IDS = list(EVENT_TYPE_LIST.keys())
+EVENT_COLORS = [i[2] for i in EVENT_TYPE_LIST.values()]
+EVENT_LABELS = [i[1] for i in EVENT_TYPE_LIST.values()]
 
 #Semantic types for pandora
 SEMANITC_TYPE_MAP = {

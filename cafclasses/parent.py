@@ -78,6 +78,16 @@ class CAF:
       Set prism bins
       """
       self.prism_binning = prism_bins
+    def set_momentum_bins(self,momentum_bins):
+      """
+      Set momentum bins
+      """
+      self.momentum_binning = momentum_bins
+    def set_costheta_bins(self,costheta_bins):
+      """
+      Set costtheta bins
+      """
+      self.costheta_binning = costheta_bins
     #-------------------- adders --------------------#
     def add_key(self,keys,fill=np.nan):
       """
@@ -114,6 +124,11 @@ class CAF:
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
       print(f'--scaling to POT: {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
+    def scale_to_prism_coeff(self,prism_coeff):
+      """
+      First set the prism binnings of events, then scale to the prism coefficient.
+      """
+      pass
     #-------------------- getters --------------------#
     def get_reference_df(self,ref):
       """

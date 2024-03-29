@@ -4,6 +4,7 @@ from sbnd.general import utils
 from sbnd.general import plotters
 import numpy as np
 from matplotlib.colors import LogNorm
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 day = plotters.day
 
@@ -31,12 +32,13 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
   return fig,ax
 
 def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,label_boxes=False,
-                colorbar=False,ax=None,fig=None,**pltkwargs):
+                colorbar=False,ax=None,fig=None,text_color='wb',show_frac=False,**pltkwargs):
   """
   x,y are pd.Series
+  text_color = bw for black as high values, white for low values and vise-versa
   """
   if fig is None and ax is None: #Make figure if not provided
-    fig,ax = plt.subplots(figsize=(6,6),tight_layout=True)
+    fig,ax = plt.subplots(figsize=(6.5,6),tight_layout=True)
   elif fig is None:
     fig = plt.gcf()
   elif ax is None:
@@ -53,12 +55,32 @@ def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,
   else:
     hist,xbins,ybins,im = ax.hist2d(x,y,cmap=cmap,**pltkwargs)
   if label_boxes:
+    max_col = np.max(hist)
     for i in range(len(ybins)-1):
       for j in range(len(xbins)-1):
-        ax.text(xbins[j]+0.5,ybins[i]+0.5, f'{hist.T[i,j]:.0f}', 
-                color="w", ha="center", va="center", fontweight="bold",fontsize=16)
+        val = hist.T[i,j]
+        if val > max_col/2:
+          if text_color == 'bw':
+            color = 'k'
+          elif text_color == 'wb':
+            color = 'w'
+        else:
+          if text_color == 'bw':
+            color = 'w'
+          elif text_color == 'wb':
+            color = 'k'
+        if show_frac:
+          val = val/np.sum(hist)
+        ax.text(xbins[j]+0.5,ybins[i]+0.5, f'{val:0.2f}', 
+                color=color, ha="center", va="center", fontweight="bold",fontsize=16)
   if colorbar:
-    fig.colorbar(im, ax=ax)
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="3%", pad=0.03)
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.ax.tick_params(labelsize=16)
+    # fig_cb = plt.figure(figsize=(8, 1))
+    # ax_cb = fig_cb.add_axes([0.05, 0.80, 0.9, 0.15])
+    # cb = plt.colorbar(im, cax=ax_cb, orientation='horizontal')
   ax.set_xlabel(f'{xlabel}')
   ax.set_ylabel(f'{ylabel}')
   if title is not None:
@@ -72,7 +94,7 @@ def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_li
   x,y are pd.Series
   assume y is the true var
   """
-  fig,(ax,ax2) = plt.subplots(2,1,figsize=(6,7),tight_layout=True,sharex=True,gridspec_kw={'height_ratios': [6, 1]})
+  fig,(ax,ax2) = plt.subplots(2,1,figsize=(6.5,7),tight_layout=True,sharex=not colorbar,gridspec_kw={'height_ratios': [6, 1]})
   if 'bins' in pltkwargs:
     bins = pltkwargs['bins']
   else:
@@ -137,6 +159,38 @@ def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
       else:
           e = None
   return h,e
+
+def draw_confusion_matrix_binned(hist, figure_name='', class_names=[], show_counts=True, figsize=(7,5), norm_ax=0
+                                 ,xlabel='True class',ylabel='Predicted class',textsize=14,rot=45):
+    
+    # Initialize figure
+    fig,ax = plt.subplots(figsize=figsize)
+    fig.patch.set_alpha(0)
+    
+    # Normalize the histogram counts to the total number of entries in each true class bin
+    norms     = np.sum(hist, axis=norm_ax, keepdims=True) #norm_ax = 0 for purity, norm_ax = 1 for efficiency
+    hist_norm = hist/norms
+
+    # Initialize plot, fill
+    n_classes = len(hist)
+    xedges = yedges = -0.5+np.arange(0, n_classes + 1)
+    hh = ax.pcolormesh(xedges, yedges, hist_norm, cmap='Blues')
+    for i in range(n_classes):
+        for j in range(n_classes):
+            label = '{:0.3f}\n({})'.format(hist_norm[i,j], int(hist[i,j])) if show_counts else '{:0.3f}'.format(hist_norm[i,j])
+            ax.text(j, i, label, color="white" if hist_norm[i,j] > 0.5 else "black", ha="center", va="center",fontsize=textsize)
+            
+    # Set axes style and labels
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if len(class_names) == n_classes:
+        ax.set_xticks(np.arange(n_classes))
+        ax.set_yticks(np.arange(n_classes))
+        ax.set_xticklabels(class_names,rotation=rot)
+        ax.set_yticklabels(class_names,rotation=rot)
+    fig.colorbar(hh)
+    
+    return fig,ax
 
 #TODO: Move this to neutrino class?
 def make_mode_plots(nu_df,mode_map,weights=None,ylabel='Events',bins=np.arange(0,5.1,0.1),density=False,title=None,

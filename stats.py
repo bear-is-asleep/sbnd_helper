@@ -13,3 +13,13 @@ def calc_mode_hist(hist_vals, hist_edges):
     # Calculate the midpoint of the mode bin
     mode = (hist_edges[mode_index] + hist_edges[mode_index + 1]) / 2
     return mode
+
+def build_matrix(pred_labels, true_labels, n_classes = 5):
+    assert pred_labels.shape == true_labels.shape
+    hist = np.zeros((n_classes,n_classes))
+    for i,t in enumerate(true_labels): #Get true labels
+        if t == 5: continue #skip kaons for now
+        p = pred_labels[i] #Get associated predicted label
+        if p == -1 or t == -1 or np.isnan(p) or np.isnan(t): continue #Dummy labels
+        hist[int(p),int(t)] += 1
+    return hist

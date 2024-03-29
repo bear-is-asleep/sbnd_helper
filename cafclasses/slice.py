@@ -31,6 +31,21 @@ class CAFSlice(CAF):
       """
       self.check_key(key) #check if key exists
       self.data = self.data[self.data.cut.loc[:,key]]
+    def cut_is_cont(self,cut=True):
+      """
+      Cut to only contained
+      """
+      if cut and self.check_key('cut.cont'):
+        self.data = self.data[self.data.cut.cont]
+        return
+      keys = [
+        'cut.cont'
+      ]
+      self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      self.data.loc[:,cols[0]] = self.data.best_muon.cont_tpc
+      if cut:
+        self.data = self.data[self.data.cut.cont]
     def cut_has_nuscore(self,cut=True):
       """
       Cut those that don't have a nu score. They didn't get any reco
@@ -47,7 +62,7 @@ class CAFSlice(CAF):
       if cut:
         self.data = self.data[self.data.cut.has_nuscore] 
     
-    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,cut=False):
+    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,use_opt0=False,cut=False):
       """
       Cut to only cosmic tracks
       """
@@ -59,7 +74,12 @@ class CAFSlice(CAF):
         slc_df = slc_df[slc_df.crumbs_result.bestscore > crumbs_score]
       if fmatch_score is not None:
         print(f'fmatch score = {fmatch_score}')
-        slc_df = slc_df[slc_df.fmatch.score < fmatch_score]
+        if use_opt0:
+          print('using opt0')
+          slc_df = slc_df[slc_df.opt0.score > fmatch_score]
+        else:
+          print('using simple fmatch')
+          slc_df = slc_df[slc_df.fmatch.score < fmatch_score]
       if nu_score is not None:
         print(f'nu score = {nu_score}')
         slc_df = slc_df[slc_df.nu_score > nu_score]
@@ -350,7 +370,10 @@ class CAFSlice(CAF):
         'best_muon.truth.p.genp.tot',
         'best_muon.prism_theta',
         'best_muon.truth.p.prism_theta',
-        
+        'best_muon.dazzle.muonScore',
+        'best_muon.dazzle.pionScore',
+        'best_muon.dazzle.protonScore',
+        'best_muon.dazzle.pdg',
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
@@ -391,9 +414,43 @@ class CAFSlice(CAF):
       self.data.loc[inds,cols[32]] = np.sqrt(np.sum(pfp.data.trk.truth.p.genp**2,axis=1))
       self.data.loc[inds,cols[33]] = pfp.data.trk.prism_theta #prism theta
       self.data.loc[inds,cols[34]] = pfp.data.trk.truth.p.prism_theta #prism theta 
+      self.data.loc[inds,cols[35]] = pfp.data.trk.dazzle.muonScore
+      self.data.loc[inds,cols[36]] = pfp.data.trk.dazzle.pionScore
+      self.data.loc[inds,cols[37]] = pfp.data.trk.dazzle.protonScore
+      self.data.loc[inds,cols[38]] = pfp.data.trk.dazzle.pdg
       
       
     #-------------------- assigners --------------------#
+    def assign_costheta_bins(self,key='best_muon.costheta',assign_key='best_muon.costheta_bin',costheta_bins=None):
+      """
+      Assign costheta bins to dataframe
+      
+      costheta_bins: costheta bins set 
+      """
+      if costheta_bins is not None: self.set_costheta_bins(costheta_bins=costheta_bins)
+      self.check_key(key)
+      #self.add_key(keys)
+      self.assign_bins(self.costheta_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
+    def assign_momentum_bins(self,key='best_muon.p',assign_key='best_muon.momentum_bin',momentum_bins=None):
+      """
+      Assign momentum bins to dataframe
+      
+      momentum_bins: momentum bins set 
+      """
+      if momentum_bins is not None: self.set_momentum_bins(momentum_bins=momentum_bins)
+      self.check_key(key)
+      #self.add_key(keys)
+      self.assign_bins(self.momentum_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
+    def assign_prism_bins(self,key='best_muon.prism_theta',assign_key='best_muon.prism_bin',prism_bins=None):
+      """
+      Assign prism bins to dataframe
+      
+      prism_bins: prism bins set 
+      """
+      if prism_bins is not None: self.set_prism_bins(prism_bins=prism_bins)
+      self.check_key(key)
+      #self.add_key(keys)
+      self.assign_bins(self.prism_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
     #-------------------- getters --------------------#
     def get_numevents(self):
       """
