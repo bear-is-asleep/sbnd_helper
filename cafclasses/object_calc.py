@@ -3,7 +3,7 @@ import pandas as pd
 from tqdm import tqdm
 from sbnd.general import utils
 from sbnd.constants import *
-from sbnd.prism import *
+from sbnd.flux.prism import *
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_squared_log_error
 from scipy.stats import pearsonr
 import copy
@@ -178,62 +178,39 @@ def split_df_into_bins(df,df_comp,bins,key,low_to_high=True):
       df_inds_inrange = utils.get_inds_from_sub_inds(df_inds_set,df_comp_inds_inrange_set,df_comp_ind_depth)
     elif df_ind_depth == df_comp_ind_depth:
       df_inds_inrange = df_comp_inds_inrange_set #One to one correspondence
-    dfs_list[i] = df.loc[df_inds_inrange]
+    dfs_list[i] = df.loc[list(df_inds_inrange)]
   return dfs_list
 
-def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True,ntuple_keys=True):
-  """
-  Find an dataframe's bins and assign new key to store these bins
-  Need df_comp to parse the bins
-  Make sure df_comp.loc[:,key] matches units of bins
-  
-  df: dataframe to split
-  df_comp: dataframe to compare to, must have key with binning of df_comp
-  bins: bins to split into
-  key: key to split on
-  assign_key: key to assign bin id to
-  low_to_high: if true, bins are aranged from low to high, otherwise high to low
-  ntuple_keys: if true, keys are in tuple format, otherwise they are strings
-  """
-  if not check_reference(df,df_comp): return None #check that the dataframe can refer to the other one
-  #Index depth
-  df_ind_depth = len(df.index.values[0])
-  df_comp_ind_depth = len(df_comp.index.values[0])
-  
-  #Get key into tuple format
-  if ntuple_keys:
-    key = panda_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
-    assign_key = panda_helpers.getcolumns([assign_key],depth=len(df.keys()[0]))[0]
-  
-  #Reference indices
-  df_inds_set = set(df.index.values)
-  df_comp_inds = df_comp.index.values
-  
-  #Set dummy value to -1
-  df.loc[:,assign_key] = np.full(len(df),-1)
+def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True,ntuple_keys=True,replace_nan=-1):
+    """
+    Find an dataframe's bins and assign new key to store these bins
+    Need df_comp to parse the bins
+    Make sure df_comp.loc[:,key] matches units of bins
 
-  for i,b in tqdm(enumerate(bins)):
-    if b == bins[-1]: break #skip last bin to avoid range errors
-    #Get indices that are within prism bins
-    if low_to_high:
-      df_comp_inds_inrange_set = set(df_comp[(df_comp.loc[df_comp_inds,key] <= bins[i+1])\
-        & (df_comp.loc[df_comp_inds,key] > bins[i])].index.values)
-    else:
-      df_comp_inds_inrange_set = set(df_comp[(df_comp.loc[df_comp_inds,key] >= bins[i+1])\
-        & (df_comp.loc[df_comp_inds,key] < bins[i])].index.values)
-    #Get the dataframe's indices
-    if df_ind_depth > df_comp_ind_depth:
-      df_inds_inrange = utils.get_inds_from_sub_inds(df_inds_set,df_comp_inds_inrange_set,df_comp_ind_depth)
-    elif df_ind_depth == df_comp_ind_depth:
-      df_inds_inrange = df_comp_inds_inrange_set #One to one correspondence
-    array_size = len(df.loc[df_inds_inrange])
-    df.loc[df_inds_inrange,assign_key] = np.full(array_size,i)
-    #print(i,array_size,len(df_comp_inds))
-    
-    #Clean comp inds, we don't need the ones that have been assigned already
-    df_comp_inds = list(subtract_sets(set(df_comp_inds),df_comp_inds_inrange_set))
-    df_comp = df_comp.loc[df_comp_inds]
-  return df
+    df: dataframe to split
+    df_comp: dataframe to compare to, must have key with binning of df_comp
+    bins: bins to split into
+    key: key to split on
+    assign_key: key to assign bin id to
+    low_to_high: if true, bins are aranged from low to high, otherwise high to low
+    ntuple_keys: if true, keys are in tuple format, otherwise they are strings
+    """
+    if not check_reference(df, df_comp):
+      return None  # Check that the dataframe can refer to the other one
+
+    # Convert key to the appropriate format if it's not already a string
+    if ntuple_keys:
+        key = panda_helpers.getcolumns([key], depth=len(df_comp.keys()[0]))[0]
+        assign_key = panda_helpers.getcolumns([assign_key], depth=len(df.keys()[0]))[0]
+
+    if not low_to_high:
+      bins = sorted(bins) #sort bins in ascending order
+
+    # Use pd.cut to assign bin labels
+    df[assign_key] = pd.cut(df_comp[key], bins, labels=range(len(bins)-1), right=False)
+    # Replace NaN values with -1
+    df[assign_key] = df[assign_key].cat.add_categories([-1]).fillna(replace_nan)
+    return df
 
 def subtract_sets(set1, set2):
   return set1.difference(set2)

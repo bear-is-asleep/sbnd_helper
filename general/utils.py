@@ -177,3 +177,31 @@ def sort_by_other_list(main_list, other_list):
     sorted_tuples = sorted(zip(other_list, main_list))
     sorted_list = [element for _, element in sorted_tuples]
     return sorted_list
+  
+def calculate_fwhm_from_histogram(x, **kwargs):
+    # Create the histogram
+    counts, bin_edges = np.histogram(x, **kwargs)
+    
+    # Find the peak of the histogram
+    peak_index = np.argmax(counts)
+    peak_value = counts[peak_index]
+    
+    # Calculate the half maximum value
+    half_max = peak_value / 2.0
+    
+    # Interpolate to find the points where the histogram crosses the half maximum
+    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+    above_half_max_indices = np.where(counts >= half_max)[0]
+    
+    # Ensure there are at least two points
+    if len(above_half_max_indices) < 2:
+        raise ValueError("Not enough points above half maximum to calculate FWHM")
+    
+    # Get the first and last bin center where the counts are above the half maximum
+    first_index = above_half_max_indices[0]
+    last_index = above_half_max_indices[-1]
+    
+    # Calculate the FWHM
+    fwhm = bin_centers[last_index] - bin_centers[first_index]
+    
+    return fwhm

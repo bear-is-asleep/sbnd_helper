@@ -76,7 +76,7 @@ def set_style(ax,legend_size=12,legend_loc='best',axis_size=16,title_size=20,tic
 
 def add_label(ax,text,where='topright',**kwargs):
   if where == 'topright':
-    ax.text(0.99,0.99,text,
+    ax.text(0.98,0.98,text,
           transform=ax.transAxes,
           horizontalalignment='right',
           verticalalignment='top',**kwargs)
@@ -140,6 +140,19 @@ def add_label(ax,text,where='topright',**kwargs):
             transform=ax.transAxes,
             horizontalalignment='left',
             verticalalignment='bottom',**kwargs)
+  elif where == 'topishright':
+    ax.text(0.99,0.8,text,
+            transform=ax.transAxes,
+            horizontalalignment='right',
+            verticalalignment='top',**kwargs)
+  elif where == 'topishleft':
+    ax.text(0.01,0.8,text,
+            transform=ax.transAxes,
+            horizontalalignment='left',
+            verticalalignment='top',**kwargs)
+  else:
+    raise ValueError(f'Unknown location: {where}')
+  
 
 def get_colors(cmap, n):
     cmap = plt.get_cmap(cmap)

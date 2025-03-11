@@ -1,10 +1,11 @@
 from sbnd.general import utils
 from pyanalib import panda_helpers
-from .parent import CAF
-from sbnd.volume import *
+from .particlegroup import ParticleGroup
+from sbnd.detector.volume import *
+from sbnd.constants import *
 
 
-class CAFSlice(CAF):
+class CAFSlice(ParticleGroup):
     """
     CAF Slice class. Has functions for slc level (no pfps)
     
@@ -25,189 +26,142 @@ class CAFSlice(CAF):
       df = pd.read_hdf(fname,key=key,**kwargs)
       return CAFSlice(df,**kwargs)
     #-------------------- cutters --------------------#
-    def apply_cut(self,key):
-      """
-      Cut the data based on key
-      """
-      self.check_key(key) #check if key exists
-      self.data = self.data[self.data.cut.loc[:,key]]
     def cut_is_cont(self,cut=True):
       """
       Cut to only contained
       """
-      if cut and self.check_key('cut.cont'):
-        self.data = self.data[self.data.cut.cont]
-        return
-      keys = [
-        'cut.cont'
-      ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = self.data.best_muon.cont_tpc
-      if cut:
-        self.data = self.data[self.data.cut.cont]
+      condition = self.data.best_muon.cont_tpc
+      self.apply_cut('cut.cont', condition, cut=cut)
     def cut_has_nuscore(self,cut=True):
       """
       Cut those that don't have a nu score. They didn't get any reco
       """
-      if cut and self.check_key('cut.has_score'):
-        self.data = self.data[self.data.cut.has_nuscore]
-        return
-      keys = [
-        'cut.has_nuscore'
-      ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = self.data.nu_score >= 0
-      if cut:
-        self.data = self.data[self.data.cut.has_nuscore] 
+      condition = self.data.nu_score >= 0
+      self.apply_cut('cut.has_nuscore', condition, cut)
     
-    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,use_opt0=False,cut=False):
+    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,use_opt0=False,cut=False,use_isclearcosmic=True):
       """
       Cut to only cosmic tracks
       """
-      if self.check_key('cut.cosmic'):
-        self.data = self.data[self.data.cut.cosmic]
-        return
-      slc_df = self.data[self.data.is_clear_cosmic != 1] #removed from nu score = -1
+      print(f'Number of clear cosmic: {len(self.data[self.data.is_clear_cosmic == 1])}')
+      if use_isclearcosmic:
+        print('Cutting is clear cosmic')
+        condition = self.data.is_clear_cosmic != 1
+      else:
+        print('Skipping is clear cosmic cut')
+        condition = np.array([True]*len(self.data))
       if crumbs_score is not None:
-        slc_df = slc_df[slc_df.crumbs_result.bestscore > crumbs_score]
+          print(f'Cutting crumbs score: {crumbs_score}')
+          condition &= self.data.crumbs_result.bestscore > crumbs_score
       if fmatch_score is not None:
-        print(f'fmatch score = {fmatch_score}')
-        if use_opt0:
-          print('using opt0')
-          slc_df = slc_df[slc_df.opt0.score > fmatch_score]
-        else:
-          print('using simple fmatch')
-          slc_df = slc_df[slc_df.fmatch.score < fmatch_score]
+          if use_opt0:
+              print(f'Cutting opt0 score: {fmatch_score}')
+              condition &= self.data.opt0.score > fmatch_score
+          elif use_opt0 == 'highlevel':
+              print(f'Cutting highlevel opt0 score: {fmatch_score} (R-H/R)')
+              # R - H / R
+              _score = (self.data.opt0.measPE - self.data.opt0.hypoPE)/self.data.opt0.measPE
+              condition &= _score > fmatch_score    
+          
+          else:
+              print(f'Cutting fmatch score: {fmatch_score}')
+              condition &= self.data.fmatch.score < fmatch_score
       if nu_score is not None:
-        print(f'nu score = {nu_score}')
-        slc_df = slc_df[slc_df.nu_score > nu_score]
-      inds = slc_df.index.values
-      #add the boolean to the data
-      keys = [
-        'cut.cosmic'
-      ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = False
-      self.data.loc[inds,cols[0]] = True
-      if cut:
-        self.data = self.data[self.data.cut.cosmic]
+          print(f'Cutting nu score: {nu_score}')
+          condition &= self.data.nu_score > nu_score
+
+      self.apply_cut('cut.cosmic', condition, cut)
     def cut_fv(self,volume=FV,cut=False):
       """
       Cut to only in fv
       """
-      if cut and self.check_key('cut.fv') and self.check_key('truth.fv'):
-        self.data = self.data[self.data.cut.fv]
-        return
       keys = [
         'cut.fv',
         'truth.fv' #truth fv but not really a cut
       ]
-      self.add_key(keys,fill=False)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = involume(self.data.vertex, volume=volume) #based on pandora vertex
-      self.data.loc[:,cols[1]] = involume(self.data.truth.position,volume=volume) #based on true vertex
-      if cut: #add handle to cut on truth??
-        self.data = self.data[self.data.cut.fv]
+      conditions = [
+        involume(self.data.vertex, volume=volume), #based on pandora vertex
+        involume(self.data.truth.position,volume=volume) #based on true vertex
+      ]
+      self.apply_cut(keys[0], conditions[0], cut)
+      self.apply_cut(keys[1], conditions[1], False) #Do not cut on true vertex
     def cut_muon(self,cut=False):
       """
       Cut to only muon
       """
-      if cut and self.check_key('cut.has_muon'):
-        self.data = self.data[self.data.cut.has_muon]
-        return
-      keys = [
-        'cut.has_muon'
-      ]
-      self.add_key(keys,fill=False)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = self.data.has_muon
-      if cut:
-        self.data = self.data[self.data.cut.has_muon]
+      condition = self.data.has_muon
+      self.apply_cut('cut.muon', condition, cut)
     def cut_trk(self,cut=False):
       """
       Cut to only tracks
       """
-      if cut and self.check_key('cut.trk'):
-        self.data = self.data[self.data.cut.trk]
-        return
-      keys = [
-        'cut.trk'
-      ]
-      self.add_key(keys,fill=False)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = self.data.has_trk
-      if cut:
-        self.data = self.data[self.data.cut.trk]
+      condition = self.data.has_trk
+      self.apply_cut('cut.trk', condition, cut)
     def cut_all(self,cut=False):
       """
       add a column that is true if all cuts are true
       """
-      if cut and self.check_key('cut.total'):
-        self.data = self.data[self.data.cut.total]
-        return
-      keys = [
-        'cut.total'
-      ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      #vectorize this
-      self.data.loc[:,cols[0]] = self.data.cut.fv\
+      condition = self.data.cut.fv\
         & self.data.cut.cosmic\
-        & self.data.cut.has_muon
-      if cut:
-        self.data = self.data[self.data.cut.total]
+        & self.data.cut.trk\
+        & self.data.cut.muon
+      self.apply_cut('cut.all', condition, cut)
     #-------------------- adders --------------------#
     def add_has_muon(self,pfp):
       """
       Check if there is a muon
       """
-      #has to be a track to be a muon (for now)
+      # Set keys, conditions and values
+      keys = ['has_muon']
+      #Get slices with muons
       muons = pfp.data[pfp.data.bestpdg == 13]
       inds = utils.get_sub_inds_from_inds(muons.index.values,self.data.index.values,self.index_depth)
-      #print(inds)
-      #now add the boolean to the data
-      keys = [
-        'has_muon'
-      ]
-      self.add_key(keys,fill=False)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[inds,cols[0]] = True
+      #Set condition
+      condition = pd.Series(False,index=self.data.index)
+      condition.loc[inds] = True
+      self.add_cols(keys,[True],conditions=condition,fill=False)
     def add_has_trk(self,pfp):
       """
       Check if there is a track
       """
-      #has to be a track to be a muon (for now)
-      trks = pfp.data[pfp.data.semantic_type == 0]
-      inds = utils.get_sub_inds_from_inds(trks.index.values,self.data.index.values,self.index_depth)
-      best_trk_score = pfp.data.groupby(level=[0,1,2]).trackScore.max()
-      #now add the boolean to the data
+      # Set keys, conditions and values
       keys = [
         'has_trk',
         'best_trk_score'
       ]
-      self.add_key(keys,fill=False)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[inds,cols[0]] = True
-      self.data.loc[inds,cols[1]] = best_trk_score
+      #Get slices with tracks
+      trks = pfp.data[pfp.data.semantic_type == 0]
+      inds = utils.get_sub_inds_from_inds(trks.index.values,self.data.index.values,self.index_depth)
+      #Set condition
+      condition = pd.Series(False,index=self.data.index)
+      condition.loc[inds] = True
+      #Set values
+      best_trk_score = pfp.data.groupby(level=[0,1,2]).trackScore.max()
+      is_trk = pd.Series(True,index=self.data.index).values
+      values = [
+        True,
+        best_trk_score
+      ]
+      #Handle adding columns of differing types
+      self.add_cols([keys[0]],[values[0]],conditions=condition,fill=False)
+      self.add_cols([keys[1]],[values[1]],conditions=condition,fill=np.nan)
     def add_in_av(self):
       """
       Add containment 1 or 0 for each pfp
       """
+      #Set keys, values, conditions
       keys = [
         'truth.av',
         'vertex.av'
       ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = involume(self.data.truth.position,volume=AV)
-      self.data.loc[:,cols[1]] = involume(self.data.vertex,volume=AV)
+      values = [
+        involume(self.data.truth.position,volume=AV),
+        involume(self.data.vertex,volume=AV)
+      ]
+      self.add_cols(keys,values,fill=False)
     def add_shws_trks(self,pfp,energy_threshold=0.):
       """
       Count the number of showers and tracks
-      
       energy_threshold: minimum energy to be observable (this probably needs some extra thinking)
       """
       #Get slice indices in common
@@ -277,17 +231,15 @@ class CAFSlice(CAF):
       """
       Find total visible energy
       """
+      # Set keys, values, conditions
+      keys = [
+        "truth.visE"
+      ]
       visible = np.max([self.data.truth.plane.I0.I0.visE.values
         ,self.data.truth.plane.I0.I1.visE.values
         ,self.data.truth.plane.I0.I2.visE.values],axis=0)
       
-      #Add to slice
-      keys = [
-        "truth.visE"
-      ]
-      self.add_key(keys)
-      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[:,cols[0]] = visible  
+      self.add_cols(keys,[visible]) 
     
     def add_event_type(self):
       """
@@ -333,7 +285,7 @@ class CAFSlice(CAF):
       #Get slice indices in common
       inds = utils.get_sub_inds_from_inds(pfp.data.index.values,self.data.index.values,self.index_depth)
       
-      #Add to slice
+      #Add to slice - float values
       keys = [
         'best_muon.energy',
         'best_muon.p',
@@ -343,7 +295,6 @@ class CAFSlice(CAF):
         'best_muon.dir.y',
         'best_muon.dir.z',
         'best_muon.len',
-        'best_muon.cont_tpc',
         'best_muon.start.x',
         'best_muon.start.y',
         'best_muon.start.z',
@@ -363,7 +314,6 @@ class CAFSlice(CAF):
         'best_muon.truth.p.end_process',
         'best_muon.truth.p.theta',
         'best_muon.truth.p.costheta',
-        'best_muon.truth.p.cont_tpc',
         'best_muon.truth.p.genp.x',
         'best_muon.truth.p.genp.y',
         'best_muon.truth.p.genp.z',
@@ -374,6 +324,8 @@ class CAFSlice(CAF):
         'best_muon.dazzle.pionScore',
         'best_muon.dazzle.protonScore',
         'best_muon.dazzle.pdg',
+        'best_muon.truth.p.mass',
+        'best_muon.truth.p.genE',
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
@@ -387,141 +339,48 @@ class CAFSlice(CAF):
       self.data.loc[inds,cols[5]] = pfp.data.trk.dir.y
       self.data.loc[inds,cols[6]] = pfp.data.trk.dir.z
       self.data.loc[inds,cols[7]] = pfp.data.trk.len
-      self.data.loc[inds,cols[8]] = pfp.data.trk.cont_tpc
-      self.data.loc[inds,cols[9]] = pfp.data.trk.start.x
-      self.data.loc[inds,cols[10]] = pfp.data.trk.start.y
-      self.data.loc[inds,cols[11]] = pfp.data.trk.start.z
-      self.data.loc[inds,cols[12]] = pfp.data.trk.end.x
-      self.data.loc[inds,cols[13]] = pfp.data.trk.end.y
-      self.data.loc[inds,cols[14]] = pfp.data.trk.end.z
-      self.data.loc[inds,cols[15]] = pfp.data.trk.truth.p.pdg
-      self.data.loc[inds,cols[16]] = pfp.data.trk.truth.p.startE
-      self.data.loc[inds,cols[17]] = pfp.data.trk.truth.p.endE
-      self.data.loc[inds,cols[18]] = pfp.data.trk.truth.p.start.x
-      self.data.loc[inds,cols[19]] = pfp.data.trk.truth.p.start.y
-      self.data.loc[inds,cols[20]] = pfp.data.trk.truth.p.start.z
-      self.data.loc[inds,cols[21]] = pfp.data.trk.truth.p.end.x
-      self.data.loc[inds,cols[22]] = pfp.data.trk.truth.p.end.y
-      self.data.loc[inds,cols[23]] = pfp.data.trk.truth.p.end.z
-      self.data.loc[inds,cols[24]] = pfp.data.trk.truth.p.start_process
-      self.data.loc[inds,cols[25]] = pfp.data.trk.truth.p.end_process
-      self.data.loc[inds,cols[26]] = pfp.data.trk.truth.p.theta
-      self.data.loc[inds,cols[27]] = np.cos(pfp.data.trk.truth.p.theta)
-      self.data.loc[inds,cols[28]] = pfp.data.trk.truth.p.cont_tpc
-      self.data.loc[inds,cols[29]] = pfp.data.trk.truth.p.genp.x
-      self.data.loc[inds,cols[30]] = pfp.data.trk.truth.p.genp.y
-      self.data.loc[inds,cols[31]] = pfp.data.trk.truth.p.genp.z
-      self.data.loc[inds,cols[32]] = np.sqrt(np.sum(pfp.data.trk.truth.p.genp**2,axis=1))
-      self.data.loc[inds,cols[33]] = pfp.data.trk.prism_theta #prism theta
-      self.data.loc[inds,cols[34]] = pfp.data.trk.truth.p.prism_theta #prism theta 
-      self.data.loc[inds,cols[35]] = pfp.data.trk.dazzle.muonScore
-      self.data.loc[inds,cols[36]] = pfp.data.trk.dazzle.pionScore
-      self.data.loc[inds,cols[37]] = pfp.data.trk.dazzle.protonScore
-      self.data.loc[inds,cols[38]] = pfp.data.trk.dazzle.pdg
+      self.data.loc[inds,cols[8]] = pfp.data.trk.start.x
+      self.data.loc[inds,cols[9]] = pfp.data.trk.start.y
+      self.data.loc[inds,cols[10]] = pfp.data.trk.start.z
+      self.data.loc[inds,cols[11]] = pfp.data.trk.end.x
+      self.data.loc[inds,cols[12]] = pfp.data.trk.end.y
+      self.data.loc[inds,cols[13]] = pfp.data.trk.end.z
+      self.data.loc[inds,cols[14]] = pfp.data.trk.truth.p.pdg
+      self.data.loc[inds,cols[15]] = pfp.data.trk.truth.p.startE
+      self.data.loc[inds,cols[16]] = pfp.data.trk.truth.p.endE
+      self.data.loc[inds,cols[17]] = pfp.data.trk.truth.p.start.x
+      self.data.loc[inds,cols[18]] = pfp.data.trk.truth.p.start.y
+      self.data.loc[inds,cols[19]] = pfp.data.trk.truth.p.start.z
+      self.data.loc[inds,cols[20]] = pfp.data.trk.truth.p.end.x
+      self.data.loc[inds,cols[21]] = pfp.data.trk.truth.p.end.y
+      self.data.loc[inds,cols[22]] = pfp.data.trk.truth.p.end.z
+      self.data.loc[inds,cols[23]] = pfp.data.trk.truth.p.start_process
+      self.data.loc[inds,cols[24]] = pfp.data.trk.truth.p.end_process
+      self.data.loc[inds,cols[25]] = pfp.data.trk.truth.p.theta
+      self.data.loc[inds,cols[26]] = np.cos(pfp.data.trk.truth.p.theta)
+      self.data.loc[inds,cols[27]] = pfp.data.trk.truth.p.genp.x
+      self.data.loc[inds,cols[28]] = pfp.data.trk.truth.p.genp.y
+      self.data.loc[inds,cols[29]] = pfp.data.trk.truth.p.genp.z
+      self.data.loc[inds,cols[30]] = np.sqrt(np.sum(pfp.data.trk.truth.p.genp**2,axis=1))
+      self.data.loc[inds,cols[31]] = pfp.data.trk.prism_theta #prism theta
+      self.data.loc[inds,cols[32]] = pfp.data.trk.truth.p.prism_theta #prism theta 
+      self.data.loc[inds,cols[33]] = pfp.data.trk.dazzle.muonScore
+      self.data.loc[inds,cols[34]] = pfp.data.trk.dazzle.pionScore
+      self.data.loc[inds,cols[35]] = pfp.data.trk.dazzle.protonScore
+      self.data.loc[inds,cols[36]] = pfp.data.trk.dazzle.pdg
+      self.data.loc[inds,cols[37]] = abs(pfp.data.trk.truth.p.pdg).map(PDG_TO_MASS_MAP)
+      self.data.loc[inds,cols[38]] = pfp.data.trk.truth.p.genE
       
-      
-    #-------------------- assigners --------------------#
-    def assign_costheta_bins(self,key='best_muon.costheta',assign_key='best_muon.costheta_bin',costheta_bins=None):
-      """
-      Assign costheta bins to dataframe
-      
-      costheta_bins: costheta bins set 
-      """
-      if costheta_bins is not None: self.set_costheta_bins(costheta_bins=costheta_bins)
-      self.check_key(key)
-      #self.add_key(keys)
-      self.assign_bins(self.costheta_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
-    def assign_momentum_bins(self,key='best_muon.p',assign_key='best_muon.momentum_bin',momentum_bins=None):
-      """
-      Assign momentum bins to dataframe
-      
-      momentum_bins: momentum bins set 
-      """
-      if momentum_bins is not None: self.set_momentum_bins(momentum_bins=momentum_bins)
-      self.check_key(key)
-      #self.add_key(keys)
-      self.assign_bins(self.momentum_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
-    def assign_prism_bins(self,key='best_muon.prism_theta',assign_key='best_muon.prism_bin',prism_bins=None):
-      """
-      Assign prism bins to dataframe
-      
-      prism_bins: prism bins set 
-      """
-      if prism_bins is not None: self.set_prism_bins(prism_bins=prism_bins)
-      self.check_key(key)
-      #self.add_key(keys)
-      self.assign_bins(self.prism_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
+      #Add to slice - bool values
+      keys = [
+        'best_muon.cont_tpc',
+        'best_muon.truth.p.cont_tpc'
+      ]
+      self.add_key(keys,fill=False)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      self.data.loc[inds,cols[0]] = pfp.data.trk.cont_tpc
+      self.data.loc[inds,cols[1]] = pfp.data.trk.truth.p.cont_tpc
     #-------------------- getters --------------------#
-    def get_numevents(self):
-      """
-      Get number of events from gen weights
-      """
-      if self.check_key('genweight'):
-        return self.data.genweight.sum()
-      raise ValueError('genweight not in dataframe. Run scale_to_pot first')
-    def get_roc(self,key,truth_type=0):
-      """
-      Get roc curve from a cut
-      """
-      if 'cut.' not in cut: cut = 'cut.'+cut #add prefix if not there
-      tpr = self.get_tpr(cut,truth_type)
-      fpr = self.get_fpr(cut,truth_type)
-      return tpr,fpr
-      
-    def get_pur_eff_f1(self,cuts=[]):
-      """
-      Get purity, efficiency, and f1 score from list of cuts applied
-      
-      Purity: signal / total events (precision)
-      Efficiency: remaining signal / initial signal (recall)
-      f1: 2*eff*purity/(eff+purity)
-      
-      returns list of purs,effs,f1s for each cut in order
-      """
-      
-      pur = np.zeros(len(cuts)+1)
-      eff = np.zeros(len(cuts)+1)
-      f1 = np.zeros(len(cuts)+1)
-      
-      slc_cut_df = self.copy().data #apply cuts to a copy
-      init_signal = slc_cut_df[slc_cut_df.truth.event_type == 0].genweight.sum() #initial number of events
-      
-      pur[0] = init_signal/slc_cut_df.genweight.sum()
-      eff[0] = 1
-      f1[0] = 1
-      
-      if len(cuts) != 0:
-        assert isinstance(cuts,list), 'cuts must be a list'
-        assert isinstance(cuts[0],str), 'cuts must be a list of strings'
-        for i,cut in enumerate(cuts):
-          slc_cut_df = slc_cut_df[slc_cut_df.cut[cut]] #apply cut
-          pur[i+1] = slc_cut_df[slc_cut_df.truth.event_type == 0].genweight.sum()/slc_cut_df.genweight.sum() #purity
-          eff[i+1] = slc_cut_df[slc_cut_df.truth.event_type == 0].genweight.sum()/init_signal
-          f1[i+1] = 2*eff[i+1]*pur[i+1]/(eff[i+1]+pur[i+1])
-      return pur,eff,f1
-    def get_events_cuts(self,cuts=[],normalize=True):
-      """
-      Get number of events from list of cuts applied
-      
-      returns dictionary of events for each cut in order
-      """
-      if 'precut' not in cuts: cuts = ['precut']+cuts #add precut if not there 
-      _slc = self.copy()
-      et_key = self.get_key('truth.event_type')
-      precut_events = _slc.data.groupby(et_key).genweight.sum().to_dict()
-      events = dict({c:precut_events for c in cuts})
-      for i,c in enumerate(cuts):
-        if i == 0: continue #skip precut
-        _slc.apply_cut(c)
-        events[c] = _slc.data.groupby(et_key).genweight.sum().to_dict()
-      df = pd.DataFrame(events).T
-      df.index.name = 'cut'
-      df = df.reindex(cuts)
-      df = df.reindex(sorted(df.columns), axis=1)
-      df.fillna(0,inplace=True)
-      if normalize:
-        df = df.div(df.sum(axis=1), axis=0)
-      return df
     #-------------------- plotters --------------------#
       
        

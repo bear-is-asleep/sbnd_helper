@@ -1,18 +1,7 @@
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-
-AV = [
-  [-200,200],#x
-  [-200,200],#y
-  [0,500],#z
-  ]
-
-FV = [
-  [-199.15+10,199.15-10],#x
-  [-200+10,200-10],#y
-  [0+10,500-50],#z
-  ]
+from .definitions import *
 
 def involume(coords,volume=AV):
   xb,yb,zb = volume

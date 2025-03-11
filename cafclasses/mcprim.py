@@ -3,7 +3,7 @@ import numpy as np
 from time import time
 
 from pyanalib import panda_helpers
-from sbnd.volume import *
+from sbnd.detector.volume import *
 from sbnd.constants import *
 from sbnd.cafclasses.parent import CAF
 from sbnd.cafclasses.object_calc import *

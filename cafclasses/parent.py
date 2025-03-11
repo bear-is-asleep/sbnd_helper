@@ -1,7 +1,7 @@
 from pandas import DataFrame
 import numpy as np
 from pyanalib import panda_helpers
-from sbnd.volume import *
+from sbnd.detector.volume import *
 from sbnd.constants import *
 from sbnd.cafclasses import object_calc
 from sbnd.general import utils
@@ -69,6 +69,9 @@ class CAF:
     #Get rid of this?
     def keys(self):
       return self.data.keys()
+    def load(fname,key='slice',**kwargs):
+      df = pd.read_hdf(fname,key=key,**kwargs)
+      return CAF(df,**kwargs)
     #-------------------- setters --------------------#
     #Change to setter?
     def key_length(self):
@@ -95,9 +98,62 @@ class CAF:
       """
       updated_df = panda_helpers.multicol_addkey(self.data, keys,fill=fill,inplace=False)
       # Update the current df with the new DataFrame
-      for col in updated_df.columns.difference(self.data.columns):
-          self.data[col] = updated_df[col]
-      return self
+      new_cols = updated_df.columns.difference(self.data.columns)
+      cols_to_add = {col: updated_df[col] for col in new_cols}
+      self.data = pd.concat([self.data, pd.DataFrame(cols_to_add)], axis=1)
+    def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True):
+      """
+      Generalized method to add a column based on conditions and corresponding values.
+      :param keys: Names of the new columns to add.
+      :param conditions: A list of boolean conditions for each value.
+      :param values: A list of values corresponding to each condition.
+      """
+
+      # Determine the fill type
+      fill_type = type(fill)
+      if hasattr(fill, 'dtype'):
+        fill_type = fill.dtype.type
+
+      #Check datatype compatibility
+      for value in values:
+        value_type = type(value)
+        if hasattr(value, 'dtype'):
+          value_type = value.dtype.type
+
+          # Allow for compatible types rather than exact matches
+          if not (issubclass(value_type, fill_type) or issubclass(fill_type, value_type)):
+            #Handle specific cases I've come across, since it's the easiest way for now
+            if (isinstance(fill,float) and value_type == np.float32)\
+              or (isinstance(fill,float) and value_type == np.float64)\
+              or (isinstance(fill,int) and value_type == np.int32)\
+              or (isinstance(fill,str) and value_type == np.str_)\
+              or (isinstance(fill,bool) and value_type == np.bool_):
+              continue 
+            raise TypeError(f'fill type ({fill_type}) is not compatible with value type ({value_type})')
+      #Verify conditions are in a list and of the right form
+      if conditions is None: 
+        conditions = np.full(np.shape(values),True)
+      elif len(np.shape(conditions)) == 1:
+        conditions = [conditions] #Make sure it's a list of lists
+      #Convert
+      self.add_key(keys, fill=fill)
+      cols = panda_helpers.getcolumns(keys, depth=self.key_length())
+      #Pad cols
+      if len(cols) == 1 and len(cols) < len(values):
+        if pad_cols:
+          cols = [cols] * len(values)
+        else: 
+          raise ValueError(f'cols ({cols}) and values ({values}) must be the same length')
+      elif len(cols) != len(values):
+        raise NotImplementedError(f'cols ({len(cols)}) and values ({len(values)}) must be the same length')
+      #print('add_cols keys: ',keys)
+      #print('add_cols values: ',values)
+      #print('add_cols conditions: ',conditions)
+      for col, condition, value in zip(cols, conditions, values):
+          #print(f'col: {col}')
+          #print(f'condition: {condition}')
+          #print(f'value: {value}')
+          self.data.loc[condition, col] = value
     def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True,mask=None):
       """
       Assign bins in dataframe, either based on self or df_comp
@@ -152,6 +208,23 @@ class CAF:
       Converts key to tuple format
       """
       return panda_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
+    def get_binned_numevents(self,bin_key,binning=None):
+      """
+      Get number of events per bin of some binning scheme
+      """
+      if not self.check_key(bin_key):
+          raise Exception(f'bin_key: {bin_key} not in keys')
+      bin_col = self.get_key(bin_key)
+      bins = self.data[bin_col].values.flatten()
+      #Set binning
+      if binning is None:
+          nbins = np.nanmax(bins)
+          assert nbins > 0, f'nbins is less than 1 {nbins}'
+          binning = np.arange(0,nbins+2,1.) - 0.5 #offset to account for digitize method
+      weights = self.data.genweight
+      #Get number of events in each bin
+      hist = np.histogram(bins,bins=binning,weights=weights)
+      return hist[0]
     #-------------------- cleaners --------------------#
     def clean(self,dummy_vals=[-9999,-999,999,9999],fill=np.nan):
       """

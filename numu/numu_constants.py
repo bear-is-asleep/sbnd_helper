@@ -1,5 +1,8 @@
 import numpy as np
 
+#Selection
+NOM_POT = 0.6e20
+
 #Muon phase space bins - nominal
 COSTHETA_BINS = np.array([-1,-0.5,0,0.27,0.45,0.62,0.76,0.86,0.94,1])
 THETA_BINS = np.arccos(COSTHETA_BINS)*180/np.pi

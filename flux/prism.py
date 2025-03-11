@@ -4,7 +4,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 #SBND imports
-from sbnd import volume
+from sbnd.detector import volume
+from sbnd.detector.definitions import *
 from sbnd.general import plotters
 from sbnd.constants import *
 
@@ -12,7 +13,18 @@ from sbnd.constants import *
 PRISM_CENTROID =  [-74.,0] #x,y [cm]
 DISTANCE_FROM_BNB = 110e2 #z [cm]
 PRISM_BINS = np.arange(0,1.8,0.2)
-
+#Precomputed prism areas
+PRISM_AREAS = [4618.376215337481, #0-0.2
+ 13915.604904740983, #0.2 - 0.4
+ 23178.371027036217, #0.4 - 0.6
+ 29145.16260931502,  #0.6 - 0.8
+ 31647.70653212055,  #0.8 - 1.0
+ 26480.702880074743, #1.0 - 1.2
+ 17927.07922989864,  #1.2 - 1.4
+ 10753.82499354881,  #1.4 - 1.6
+ 2286.5909266944673  #1.6 - 1.8
+ ]
+PRISM_VOLUME = np.sum(PRISM_AREAS[:-1])*SBND_THICKNESS
 
 def calc_rf(theta):
   return np.tan(theta*np.pi/180)*DISTANCE_FROM_BNB

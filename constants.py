@@ -1,24 +1,8 @@
 import numpy as np
-from .volume import FV
-NOM_POT = 0.6e20
+from .detector.volume import FV
 
-#SBND volume
-FACE_AREA = 400**2 #cm^2
-SBND_THICKNESS = 500 #cm
-SBND_VOLUME = FACE_AREA*SBND_THICKNESS #cm^3
-ARGON_MASS_DENSITY = 1.3954 #g/cm^3
-AVOGADRO_CONSTANT = 6.02214076e23 #mol^-1
-ARGON_MOLAR_MASS = 39.95 #g/mol
-ARGON_DENSITY = ARGON_MASS_DENSITY/ARGON_MOLAR_MASS*AVOGADRO_CONSTANT #n_argon/cm^3
-NUMBER_TARGETS = ARGON_DENSITY*SBND_VOLUME #Number of argon targets in active volume
-FV_VOLUME = np.prod([i[1]-i[0] for i in FV]) #cm^3
-NUMBER_TARGETS_FV = ARGON_DENSITY*FV_VOLUME #Number of argon targets in fiducial volume
-#NUMBER_TARGETS_FV = 4.6468e31 #https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=35364&filename=NC%26%23960%3B0%20Analysis%20Update%20-%20Physics%20Meeting%2014th%20March.pdf&version=1
-
-#Flux constants
-INTEGRATED_FLUX = 1.664e13 #cm^-2 https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=35364&filename=NC%26%23960%3B0%20Analysis%20Update%20-%20Physics%20Meeting%2014th%20March.pdf&version=1
-FRAC_NUMU = 0.936 #https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=35609&filename=NuINT%202024%20practice%20talk.pdf
-NUMU_INTEGRATED_FLUX = INTEGRATED_FLUX*FRAC_NUMU #cm^-2
+DUMMY_INT = np.iinfo(np.int32).max
+DUMMY_FLOAT = np.nan
 
 GeV2perm2 = 2.56819e31 #GeV^2 to m^2
 GeV2percm2 = GeV2perm2*1e-4 #GeV^2 to cm^2
@@ -32,6 +16,16 @@ kPi0Mass        =  1.349766e-01           # GeV
 kProtonMass     =  9.38272081e-01           # GeV
 kNeutronMass    =  9.39565413e-01           # GeV
 kPhotonMass     =  0           # GeV
+
+PDG_TO_MASS_MAP = {
+  11 : kElectronMass,
+  13 : kMuonMass,
+  22 : kPhotonMass,
+  111 : kPi0Mass,
+  211 : kPionMass,
+  2112 : kNeutronMass,
+  2212 : kProtonMass,
+}
 
 #GENIE enums
 GENIE_INTERACTION_MAP = {

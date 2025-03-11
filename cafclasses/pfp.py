@@ -3,18 +3,15 @@ from pandas import DataFrame
 import pandas as pd
 from pyanalib import panda_helpers
 from sbnd.cafclasses.object_calc import *
-from sbnd.volume import *
+from sbnd.detector.volume import *
 from sbnd.constants import *
-from .parent import CAF
+from .particle import Particle
 
 
-class PFP(CAF):
+class PFP(Particle):
   #-------------------- constructor/rep --------------------#
-  def __init__(self,*args,momentum_bins=None,costheta_bins=None,**kwargs):
+  def __init__(self,*args,**kwargs):
     super().__init__(*args,**kwargs)
-    self.set_momentum_bins(momentum_bins)
-    self.set_costheta_bins(costheta_bins)
-    #self.clean([-5]) #set dummy values to nan, for some reason pandora uses -5??
   @property
   def _constructor(self):
       return PFP
@@ -36,21 +33,12 @@ class PFP(CAF):
     Load data from hdf5 file
     """
     df = pd.read_hdf(fname,key=key,**kwargs)
-    pfp = PFP(df,**kwargs)
-    return pfp
-  #-------------------- setters --------------------#
-  def set_nu_inrange(self,nu):
+    return PFP(df,**kwargs)
+  #-------------------- helpers --------------------#
+  def classify_semantics(self,method='naive',threshold=0.5):
     """
-    Get neutrino in current indices
+    How do we classify tracks, showers, etc.?
     """
-    self.nu_inrange_df = self.get_reference_df(nu)
-  
-  #-------------------- adders --------------------#
-  def add_pfp_semantics(self,method='naive',threshold=0.5):
-    """
-    classify each as shower or track
-    """
-    #naive method for now
     if method == 'naive':
       is_shw = (self.data.trackScore < threshold) & (self.data.trackScore >= 0)
       is_trk = (self.data.trackScore >= threshold) & (self.data.trackScore <= 1)
@@ -58,33 +46,8 @@ class PFP(CAF):
       print(f'Method "{method}" not an option, choose from - "naive"')
       raise ValueError('Method not implemented')
     other = ~(is_trk | is_shw)
-    keys = [
-      'semantic_type'
-    ]
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.add_key(keys,fill=False)
-    self.data.loc[is_trk,cols[0]] = 0
-    self.data.loc[is_shw,cols[0]] = 1
-    self.data.loc[other,cols[0]] = -1
-  
-  def add_containment(self):
-    """
-    Add containment 1 or 0 for each pfp
-    """
-    keys = [
-      'shw.cont_tpc',
-      'trk.cont_tpc',
-    ]
-    self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0]] = involume(self.data.shw.start) & involume(self.data.shw.end)
-    self.data.loc[:,cols[1]] = involume(self.data.trk.start) & involume(self.data.trk.end)
-  
-  def add_stats(self):
-    self.add_stat(get_err,'mae',normalize=True)
-    self.add_stat(get_err,'dif',normalize=False)
-  
-  def add_bestpdg(self,method='dazzle_best',include_other=False
+    return is_shw,is_trk,other
+  def classify_pid(self,method='chi2',include_other=False
                   ,length=25
                   ,bdt_score=0.5
                   ,chi2_muon=30
@@ -92,22 +55,23 @@ class PFP(CAF):
                   ,chi2_proton2=90 #cut on proton
                   ,dedx=2.5):
     """
-    https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=24747&filename=20220215_Mun%20Jung%20Jung.pdf&version=1
-    Get best pdg for track and showers
+    How do we classify the particle type?
     """
     is_trk = self.data.semantic_type == 0
     if include_other: #assume other is track if not matched to semantic type
       is_trk = is_trk | (self.data.semantic_type == -1)
     is_shw = self.data.semantic_type == 1
-    is_other = ~(is_trk | is_shw)
     
     if method == 'dazzle_best':
+      print('Assigning pdg using dazzle_best method : ')
       is_muon = (self.data.trk.dazzle.pdg == 13) & is_trk
       is_proton = (self.data.trk.dazzle.pdg == 2212) & is_trk
       is_pion = (self.data.trk.dazzle.pdg == 211) & is_trk
       is_electron = (self.data.shw.razzle.pdg == 11) & is_shw
       is_photon = (self.data.shw.razzle.pdg == 22) & is_shw
     elif method == 'dazzle': #can tune the values
+      print('Assigning pdg using dazzle method : ')
+      #print(f'bdt_score: {bdt_score:.2f}')
       is_muon = (self.data.trk.dazzle.muonScore > bdt_score) & is_trk
       is_proton = (self.data.trk.dazzle.protonScore > bdt_score) & is_trk
       is_pion = (self.data.trk.dazzle.pionScore > bdt_score) & is_trk
@@ -132,28 +96,87 @@ class PFP(CAF):
       is_electron = (self.data.shw.bestplane_dEdx < dedx) & is_shw
       is_photon = ~is_electron & is_shw \
         & (~self.data.shw.bestplane_dEdx.isna()) #not all NAN
-    
     else:
       print(f'Method "{method}" not an option, choose from - "x2", "dazzle_best", "dazzle"')
       raise ValueError('Method not implemented')
+    return is_photon,is_electron,is_muon,is_pion,is_proton
+  def calculate_track_energy_momentum(self,part_mask,key,mass):
+    """
+    Calculate energy and momentum for a particle
+    """
+    cont = self.data.trk.cont_tpc & part_mask
+    uncont = ~self.data.trk.cont_tpc & part_mask
     
-    #add key
+    eng_col,mom_col = panda_helpers.getcolumns([f'trk.bestenergy',f'trk.bestmom'],depth=self.key_length())
+    
+    #Range method
+    self.data.loc[cont,eng_col] = np.sqrt(self.data[cont].trk.rangeP[f'p_{key}']**2+mass**2)
+    self.data.loc[cont,mom_col] = self.data[cont].trk.rangeP[f'p_{key}']
+    
+    #MCS method
+    self.data.loc[uncont,eng_col] = np.sqrt(self.data[uncont].trk.mcsP[f'fwdP_{key}']**2+mass**2)
+    self.data.loc[uncont,mom_col] = self.data[uncont].trk.mcsP[f'fwdP_{key}']
+    
+  #-------------------- adders --------------------#
+  def add_pfp_semantics(self,method='naive',threshold=0.5):
+    """
+    classify each as shower or track
+    """
+    #Get semantic conditions
+    is_shw,is_trk,is_other = self.classify_semantics(method=method,threshold=threshold)
+      
+    #Set keys, conditions, and values for add_col method
+    keys = [
+      'semantic_type'
+    ]
+    conditions = [
+        is_trk,is_shw,is_other
+    ]
+    values = [0, 1, -1]
+    self.add_cols(keys,values,conditions=conditions,fill=-1)
+  
+  def add_containment(self,volume=AV):
+    """
+    Add containment 1 or 0 for each pfp
+    """
+    #Set keys, conditions, and values for add_col method
+    keys = [
+      'shw.cont_tpc',
+      'trk.cont_tpc',
+    ]
+    conditions = [
+      involume(self.data.shw.start,volume=volume) & involume(self.data.shw.end,volume=volume),
+      involume(self.data.trk.start,volume=volume) & involume(self.data.trk.end,volume=volume),
+    ]
+    values = [True,True]
+    self.add_cols(keys,values,conditions=conditions,fill=False)
+  
+  def add_stats(self):
+    self.add_stat(get_err,'mae',normalize=True)
+    self.add_stat(get_err,'dif',normalize=False)
+  
+  def add_bestpdg(self,**kwargs):
+    """
+    https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=24747&filename=20220215_Mun%20Jung%20Jung.pdf&version=1
+    Get best pdg for track and showers
+    """
+    #Get pids
+    is_photon,is_electron,is_muon,is_pion,is_proton = self.classify_pid(**kwargs)
+    
+    #Set keys, conditions, and values for add_col method
     keys = [
       'bestpdg'
     ]
-    self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[is_muon,cols[0]] = 13
-    self.data.loc[is_proton,cols[0]] = 2212
-    self.data.loc[is_pion,cols[0]] = 211
-    self.data.loc[is_electron,cols[0]] = 11
-    self.data.loc[is_photon,cols[0]] = 22
+    conditions = [
+      is_photon,is_electron,is_muon,is_pion,is_proton
+    ]
+    values = [22,11,13,211,2212]
+    self.add_cols(keys,values,conditions=conditions,fill=DUMMY_INT)
   
   def add_trk_bestenergy(self):
     """
     Get best energy for track
     """
-    cont = self.data.trk.cont_tpc #containment boolean
     #PDG booleans
     muon = self.data.bestpdg == 13
     proton = self.data.bestpdg == 2212
@@ -164,68 +187,71 @@ class PFP(CAF):
       'trk.bestmom'
     ]
     self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    #muon
-    self.data.loc[cont & muon,cols[0]] = np.sqrt(self.data[cont & muon].trk.rangeP.p_muon**2+kMuonMass**2)
-    self.data.loc[cont & muon,cols[1]] = self.data[cont & muon].trk.mcsP.fwdP_muon
     
-    self.data.loc[~cont & muon,cols[0]] = np.sqrt(self.data[~cont & muon].trk.mcsP.fwdP_muon**2+kMuonMass**2)
-    self.data.loc[~cont & muon,cols[1]] = self.data[~cont & muon].trk.mcsP.fwdP_muon
-    #pion
-    self.data.loc[cont & pion,cols[0]] = np.sqrt(self.data[cont & pion].trk.rangeP.p_pion**2+kPionMass**2)
-    self.data.loc[cont & pion,cols[1]] = self.data[cont & pion].trk.mcsP.fwdP_pion
-    
-    self.data.loc[~cont & pion,cols[0]] = np.sqrt(self.data[~cont & pion].trk.mcsP.fwdP_pion**2+kPionMass**2)
-    self.data.loc[~cont & pion,cols[1]] = self.data[~cont & pion].trk.mcsP.fwdP_pion
-    #proton
-    self.data.loc[cont & proton,cols[0]] = np.sqrt(self.data[cont & proton].trk.rangeP.p_proton**2+kProtonMass**2)
-    self.data.loc[cont & proton,cols[1]] = self.data[cont & proton].trk.mcsP.fwdP_proton
-    
-    self.data.loc[~cont & proton,cols[0]] = np.sqrt(self.data[~cont & proton].trk.mcsP.fwdP_proton**2+kProtonMass**2)
-    self.data.loc[~cont & proton,cols[1]] = self.data[~cont & proton].trk.mcsP.fwdP_proton
+    #Calculate the values which will add it to the dataframe
+    self.calculate_track_energy_momentum(muon,'muon',kMuonMass)
+    self.calculate_track_energy_momentum(proton,'proton',kProtonMass)
+    self.calculate_track_energy_momentum(pion,'pion',kPionMass)
     
   def add_neutrino_dir(self):
     """
     add neutrino direction to df
     """
+    # Set keys, conditions, and values for add_col method
     keys = [
       'shw.nudir.x','shw.nudir.y','shw.nudir.z',
       'shw.truth.p.nudir.x','shw.truth.p.nudir.y','shw.truth.p.nudir.z',
       'trk.nudir.x','trk.nudir.y','trk.nudir.z',
       'trk.truth.p.nudir.x','trk.truth.p.nudir.y','trk.truth.p.nudir.z',
+    ]
+    neutrino_dirs = [
+        get_neutrino_dir(self.data.shw.start),
+        get_neutrino_dir(self.data.shw.truth.p.start),
+        get_neutrino_dir(self.data.trk.start),
+        get_neutrino_dir(self.data.trk.truth.p.start)
+    ]
+    #Safely flatten the neutrino directions
+    stacked = np.array(neutrino_dirs) #4, N, 3
+    #Transpose to get to 4,3,N then reshape to 12,N
+    neutrino_dirs = stacked.transpose(0,2,1).reshape(12, -1)
+    #Add neutrino directions first
+    self.add_cols(keys,neutrino_dirs,fill=np.float64(np.nan))
+    
+    keys = [
       'shw.prism_theta','shw.truth.p.prism_theta','trk.prism_theta','trk.truth.p.prism_theta',
     ]
-    self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0:3]] = get_neutrino_dir(self.data.shw.start)
-    self.data.loc[:,cols[3:6]]= get_neutrino_dir(self.data.shw.truth.p.start)
-    self.data.loc[:,cols[6:9]] = get_neutrino_dir(self.data.trk.start)
-    self.data.loc[:,cols[9:12]] = get_neutrino_dir(self.data.trk.truth.p.start)
-    self.data.loc[:,cols[12]] = np.arccos(self.data.shw.nudir.z)*180/np.pi
-    self.data.loc[:,cols[13]] = np.arccos(self.data.shw.truth.p.nudir.z)*180/np.pi
-    self.data.loc[:,cols[14]] = np.arccos(self.data.trk.nudir.z)*180/np.pi
-    self.data.loc[:,cols[15]] = np.arccos(self.data.trk.truth.p.nudir.z)*180/np.pi
+    prism_thetas = [
+        np.arccos(self.data.shw.nudir.z) * 180 / np.pi,
+        np.arccos(self.data.shw.truth.p.nudir.z) * 180 / np.pi,
+        np.arccos(self.data.trk.nudir.z) * 180 / np.pi,
+        np.arccos(self.data.trk.truth.p.nudir.z) * 180 / np.pi
+    ]
+    #Now add prism info
+    self.add_cols(keys,prism_thetas,fill=np.float64(np.nan))
   
   def add_theta(self):
     """
     add theta wrt nu direction
     """
+    # Set keys, conditions, and values for add_col method
     keys = [
       'shw.theta',
       'shw.truth.p.theta',
       'trk.theta',
       'trk.truth.p.theta',
     ]
-    self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0]] = get_theta(self.data.shw.dir.values,self.data.shw.nudir.values)
-    self.data.loc[:,cols[1]]= get_theta(self.data.shw.truth.p.genp.values,self.data.shw.truth.p.nudir.values)
-    self.data.loc[:,cols[2]] = get_theta(self.data.trk.dir.values,self.data.trk.nudir.values)
-    self.data.loc[:,cols[3]] = get_theta(self.data.trk.truth.p.genp.values,self.data.trk.truth.p.nudir.values)
+    thetas = [
+        get_theta(self.data.shw.dir.values,self.data.shw.nudir.values),
+        get_theta(self.data.shw.truth.p.genp.values,self.data.shw.truth.p.nudir.values),
+        get_theta(self.data.trk.dir.values,self.data.trk.nudir.values),
+        get_theta(self.data.trk.truth.p.genp.values,self.data.trk.truth.p.nudir.values)
+    ]
+    self.add_cols(keys,thetas)
   def add_Etheta(self):
     """
     add theta wrt nu direction
     """
+    # Set keys, conditions, and values for add_col method
     keys = [
       'shw.Etheta2',
       'shw.truth.p.Etheta2',
@@ -233,22 +259,13 @@ class PFP(CAF):
       'trk.truth.p.Etheta2',
     ]
     self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0]] = self.data.shw.theta**2*self.data.shw.bestplane_energy
-    self.data.loc[:,cols[1]]= self.data.shw.truth.p.theta**2*self.data.shw.truth.p.genE
-    self.data.loc[:,cols[2]] = self.data.trk.theta**2*self.data.trk.bestenergy
-    self.data.loc[:,cols[3]]= self.data.trk.truth.p.theta**2*self.data.trk.truth.p.genE
-  # def add_visenergy(self):
-  #   """
-  #   Best plane true visible energy
-  #   """
-  #   keys = [
-  #     'shw.truth.p.bestplane_energy',
-  #     'trk.truth.p.bestplane_energy',
-  #   ]
-  #   self.add_key(keys)
-  #   cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-  #   self.data.loc[:,cols[0]] = self.data.shw.truth
+    Ethetas = [
+        self.data.shw.bestplane_energy*self.data.shw.theta**2,
+        self.data.shw.truth.p.genE*self.data.shw.truth.p.theta**2,
+        self.data.trk.bestenergy*self.data.trk.theta**2,
+        self.data.trk.truth.p.genE*self.data.trk.truth.p.theta**2
+    ]
+    self.add_cols(keys,Ethetas)
     
   def add_stat(self,func,key,**funkwargs):
     """
@@ -256,14 +273,14 @@ class PFP(CAF):
     """
     keys = [
       # Key names for comparing true and reco
-      f'shw.stat.{key}.Etheta2',
+      #f'shw.stat.{key}.Etheta2',
       f'shw.stat.{key}.energy',
       f'shw.stat.{key}.theta',
       f'shw.stat.{key}.start.x',
       f'shw.stat.{key}.start.y',
       f'shw.stat.{key}.start.z',
       f'shw.stat.{key}.vtx',
-      f'trk.stat.{key}.Etheta2',
+      #f'trk.stat.{key}.Etheta2',
       f'trk.stat.{key}.energy',
       f'trk.stat.{key}.theta',
       f'trk.stat.{key}.start.x',
@@ -272,25 +289,24 @@ class PFP(CAF):
       f'trk.stat.{key}.vtx',
     ]
     
-    self.add_key(keys)
-    cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+    stats = [
+      #func(self.data.shw.Etheta2,self.data.shw.truth.p.Etheta2,**funkwargs),
+      func(self.data.shw.bestplane_energy,self.data.shw.truth.p.genE,**funkwargs),
+      func(self.data.shw.theta,self.data.shw.truth.p.theta,**funkwargs),
+      func(self.data.shw.start.x,self.data.shw.truth.p.start.x,**funkwargs),
+      func(self.data.shw.start.y,self.data.shw.truth.p.start.y,**funkwargs),
+      func(self.data.shw.start.z,self.data.shw.truth.p.start.z,**funkwargs),
+      func(self.data.shw.start.values,self.data.shw.truth.p.start.values,**funkwargs),
+      #func(self.data.trk.Etheta2,self.data.trk.truth.p.Etheta2,**funkwargs),
+      func(self.data.trk.bestenergy,self.data.trk.truth.p.genE,**funkwargs),
+      func(self.data.trk.theta,self.data.trk.truth.p.theta,**funkwargs),
+      func(self.data.trk.start.x,self.data.trk.truth.p.start.x,**funkwargs),
+      func(self.data.trk.start.y,self.data.trk.truth.p.start.y,**funkwargs),
+      func(self.data.trk.start.z,self.data.trk.truth.p.start.z,**funkwargs),
+      func(self.data.trk.start.values,self.data.trk.truth.p.start.values,**funkwargs)
+    ]
     
-    #showers
-    self.data.loc[:,cols[0]] = func(self.data.shw.Etheta2,self.data.shw.truth.p.Etheta2,**funkwargs)
-    self.data.loc[:,cols[1]] = func(self.data.shw.bestplane_energy,self.data.shw.truth.p.genE,**funkwargs)
-    self.data.loc[:,cols[2]] = func(self.data.shw.theta,self.data.shw.truth.p.theta,**funkwargs)
-    self.data.loc[:,cols[3]] = func(self.data.shw.start.x,self.data.shw.truth.p.start.x,**funkwargs)
-    self.data.loc[:,cols[4]] = func(self.data.shw.start.y,self.data.shw.truth.p.start.y,**funkwargs)
-    self.data.loc[:,cols[5]] = func(self.data.shw.start.z,self.data.shw.truth.p.start.z,**funkwargs)
-    self.data.loc[:,cols[6]] = func(self.data.shw.start.values,self.data.shw.truth.p.start.values,**funkwargs)
-    #tracks
-    self.data.loc[:,cols[7]] = func(self.data.trk.Etheta2,self.data.trk.truth.p.Etheta2,**funkwargs)
-    self.data.loc[:,cols[8]] = func(self.data.trk.bestenergy,self.data.trk.truth.p.genE,**funkwargs)
-    self.data.loc[:,cols[9]] = func(self.data.trk.theta,self.data.trk.truth.p.theta,**funkwargs)
-    self.data.loc[:,cols[10]] = func(self.data.trk.start.x,self.data.trk.truth.p.start.x,**funkwargs)
-    self.data.loc[:,cols[11]] = func(self.data.trk.start.y,self.data.trk.truth.p.start.y,**funkwargs)
-    self.data.loc[:,cols[12]] = func(self.data.trk.start.z,self.data.trk.truth.p.start.z,**funkwargs)
-    self.data.loc[:,cols[13]] = func(self.data.trk.start.values,self.data.trk.truth.p.start.values,**funkwargs)
+    self.add_cols(keys,stats)
 
     #If any stat is na, the others are also na
     self.data[self.data.trk.stat.isna().any(axis=1)].trk.stat = np.nan
@@ -303,11 +319,7 @@ class PFP(CAF):
     costheta_bins: costheta bins set 
     """
     if costheta_bins is not None: self.set_costheta_bins(costheta_bins=costheta_bins)
-    keys = [
-      key
-    ]
     self.check_key(key)
-    #self.add_key(keys)
     self.assign_bins(self.costheta_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
   def assign_momentum_bins(self,key='p',assign_key='momentum_bin',momentum_bins=None):
     """
@@ -316,11 +328,7 @@ class PFP(CAF):
     momentum_bins: momentum bins set 
     """
     if momentum_bins is not None: self.set_momentum_bins(momentum_bins=momentum_bins)
-    keys = [
-      key
-    ]
     self.check_key(key)
-    #self.add_key(keys)
     self.assign_bins(self.momentum_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
   def assign_prism_bins(self,key='prism_theta',assign_key='prism_bin',prism_bins=None):
     """
@@ -329,28 +337,8 @@ class PFP(CAF):
     prism_bins: prism bins set 
     """
     if prism_bins is not None: self.set_prism_bins(prism_bins=prism_bins)
-    keys = [
-      key
-    ]
     self.check_key(key)
-    #self.add_key(keys)
     self.assign_bins(self.prism_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
-  
-  def postprocess(self,fill=np.nan,dummy=np.nan,method_sem='naive',method_pdg='x2'):
-    """
-    Do all the post processing in the correct order
-    """
-    #fixers
-    self.fix_shw_energy(fill=fill,dummy=dummy)
-    #adders
-    self.add_pfp_semantics(method=method_sem)
-    self.add_bestpdg(method=method_pdg)
-    self.add_reco_containment()
-    self.add_neutrino_dir()
-    self.add_theta()
-    self.add_trk_bestenergy()
-    self.add_Etheta()
-    self.add_stats()
   
 
   #-------------------- getters --------------------#
@@ -371,27 +359,18 @@ class PFP(CAF):
                ,momentum_bins=self.momentum_binning
                ,costheta_bins=self.costheta_binning
                ,pot=self.pot)
-    
-  
-  def get_particles(self,pdgs,remove_nan=True,use_reco=False,**dropna_args):
-    """
-    Return list of particles from list of pdgs
-    """
-    parts = [None]*len(pdgs)
-    for i,pdg in enumerate(pdgs):
-      parts[i] = self.get_parts_from_pdg(pdg,remove_nan=remove_nan,use_reco=use_reco,**dropna_args)
-    return parts
-    
   def get_total_reco_energy(self):
     """
     Return total reco energy from pfp
     """
-    return get_row_vals(self.data.shw.bestplane_energy) #Add tracks later
+    return get_row_vals(self.data.shw.bestplane_energy)+get_row_vals(self.data.trk.bestenergy) #Add tracks later
   def get_min_theta(self):
     """
     Return minimum theta from pfp
     """
-    return get_row_vals(self.data.shw.theta,mode='min')
+    shw_min = get_row_vals(self.data.shw.theta,mode='min')
+    trk_min = get_row_vals(self.data.trk.theta,mode='min')
+    return np.min(shw_min,trk_min,axis=0)
   def get_true_parts(self,remove_nan=True,**dropna_args):
     """
     return true particles from track and shower matching
@@ -414,10 +393,10 @@ class PFP(CAF):
       particles = self.copy()
       p = particles.data[particles.data.bestpdg == pdg]
     return PFP(p
-               ,prism_bins=self.prism_binning
-               ,momentum_bins=self.momentum_binning
-               ,costheta_bins=self.costheta_binning
-               ,pot=self.pot)
+            ,prism_bins=self.prism_binning
+            ,momentum_bins=self.momentum_binning
+            ,costheta_bins=self.costheta_binning
+            ,pot=self.pot)
     
   #-------------------- cleaners --------------------#
   def clean_dummy_track_score(self):
@@ -433,55 +412,5 @@ class PFP(CAF):
     self.nu_inrange_df = None #overwrite data
   
   #-------------------- checkers --------------------#
-  def check_nu_inrange(self,nu=None):
-    """
-    Check that neutrino is in current indices
-    """
-    if self.nu_inrange_df is None:
-      if nu is None:
-        raise Exception("Need to provide nu object since it hasn't been set yet")
-      else:
-        self.set_nu_inrange(nu)
-        if self.nu_inrange_df.index.duplicated().any():
-          raise Exception("There are duplicated indices in the nu object")
-    return self.nu_inrange_df is not None
-
-  #-------------------- fixers --------------------#
-  def fix_shw_energy(self,fill=-5,dummy=-5):
-      ## correct the reconstructed shower energy column
-      nhits2 = ((self.data.shw.plane.I2.nHits >= self.data.shw.plane.I1.nHits) & (self.data.shw.plane.I2.nHits>= self.data.shw.plane.I0.nHits))
-      nhits1 = ((self.data.shw.plane.I1.nHits >= self.data.shw.plane.I2.nHits) & (self.data.shw.plane.I1.nHits>= self.data.shw.plane.I0.nHits))
-      nhits0 = ((self.data.shw.plane.I0.nHits >= self.data.shw.plane.I2.nHits) & (self.data.shw.plane.I0.nHits>= self.data.shw.plane.I1.nHits))
-      # if energy[plane] is positive
-      energy2 = (self.data.shw.plane.I2.energy > 0 )
-      energy1 = (self.data.shw.plane.I1.energy > 0 )
-      energy0 = (self.data.shw.plane.I0.energy > 0 )
-      conditions = [(nhits2 & energy2),
-                  (nhits1 & energy1),
-                  (nhits0 & energy0),
-                  (((nhits2 & energy2)== False) & (energy1) & (self.data.shw.plane.I1.nHits>= self.data.shw.plane.I0.nHits)), # if 2 is invalid, and 1 is positive and 1>0, go with 1 
-                  (((nhits2 & energy2)== False) & (energy0) & (self.data.shw.plane.I0.nHits>= self.data.shw.plane.I1.nHits)), # if 2 is invalid, and 0 is positive and 0>1, go with 0
-                  (((nhits1 & energy1)== False) & (energy2) & (self.data.shw.plane.I2.nHits>= self.data.shw.plane.I0.nHits)), # if 1 is invalid, and 2 is positive and 2>0, go with 2 
-                  (((nhits1 & energy1)== False) & (energy0) & (self.data.shw.plane.I0.nHits>= self.data.shw.plane.I2.nHits)), # if 1 is invalid, and 0 is positive and 0>2, go with 0
-                  (((nhits0 & energy0)== False) & (energy2) & (self.data.shw.plane.I2.nHits>= self.data.shw.plane.I1.nHits)), # if 0 is invalid, and 2 is positive and 2>1, go with 2              
-                  (((nhits0 & energy0)== False) & (energy1) & (self.data.shw.plane.I1.nHits>= self.data.shw.plane.I2.nHits)), # if 0 is invalid, and 1 is positive and 1>2, go with 1 
-                  ((self.data.shw.plane.I2.nHits==dummy) & (self.data.shw.plane.I1.nHits==dummy) & (self.data.shw.plane.I0.nHits==dummy))]
-      shw_choices = [ self.data.shw.plane.I2.energy,
-                      self.data.shw.plane.I1.energy,
-                      self.data.shw.plane.I0.energy,
-                      self.data.shw.plane.I1.energy,
-                      self.data.shw.plane.I0.energy,
-                      self.data.shw.plane.I2.energy,
-                      self.data.shw.plane.I0.energy,
-                      self.data.shw.plane.I2.energy,
-                      self.data.shw.plane.I1.energy,
-                      -1]
-      self.data.loc[:,panda_helpers.getcolumns(['shw.bestplane_energy'],depth=self.key_length())] = np.select(conditions, shw_choices, default = fill)
   #-------------------- cutters --------------------#
-  def apply_cut(self,slc,key):
-      """
-      Cut pfp from the slc based on the key
-      """
-      _slc = slc.copy()
-      _slc.apply_cut(key)
-      self.data = _slc.get_reference_df(self)
+  #-------------------- fixers --------------------#

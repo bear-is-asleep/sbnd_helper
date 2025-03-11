@@ -2,7 +2,7 @@ import numpy as np
 from time import time
 
 from pyanalib import panda_helpers
-from sbnd.volume import *
+from sbnd.detector.volume import *
 from sbnd.constants import *
 from sbnd.numu import selection as numusel
 from sbnd.cafclasses.object_calc import *
@@ -14,15 +14,9 @@ class NU(CAF):
   def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
         return NU(data)
-  def postprocess(self):
-    """
-    Run all post processing
-    """
-    self.add_av()
-    self.add_isnumucc()
-    self.add_nudir()
-    self.add_theta()
-    self.add_costheta()
+  def load(fname,key='mcnu',**kwargs):
+      df = pd.read_hdf(fname,key=key,**kwargs)
+      return NU(df,**kwargs)
   def all_cuts(self,volume=FV):
     """
     Apply all cuts

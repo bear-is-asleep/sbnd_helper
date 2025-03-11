@@ -1,7 +1,7 @@
 import numpy as np
 import sys
 sys.path.append('/sbnd/app/users/brindenc/mysbnana_v09_75_03/srcs/sbnana/sbnana/SBNAna/pyana')
-from sbnd.volume import involume
+from sbnd.detector.volume import involume
 
 def get_numucc_mask(mcnu):
   """

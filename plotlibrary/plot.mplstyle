@@ -1,0 +1,15 @@
+#axes
+axes.formatter.use_mathtext: True
+axes.formatter.limits: -3, 3
+axes.titlesize : 15
+axes.labelsize : 15
+
+#lines
+lines.linewidth : 2
+
+#ticks
+xtick.labelsize : 15
+ytick.labelsize : 15
+
+#legend
+legend.fontsize: 15

@@ -1,5 +1,5 @@
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
+#import matplotlib.cm as cm
 from sbnd.general import utils
 from sbnd.general import plotters
 import numpy as np
@@ -18,10 +18,11 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
     counts = [len(s) for s in series]
   else:
     counts = [round(np.sum(w)) for w in weights]
-  legend_labels = [f'{lab} ({counts[i]:,})' for i,lab in enumerate(labels)]
+  legend_labels = [f'{lab} ({100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
   if colors is None:
-    colors = cm.get_cmap(cmap, len(labels))
-    colors = [list(colors(i)) for i in range(len(labels))]
+    cmap = plt.get_cmap(cmap, len(labels))
+    colors = cmap(range(len(labels)))
+    colors = [tuple(color) for color in colors]
   #edgecolors = [plotters.darken_color(c,factor=0.5) for c in colors]
   #for s, c, e, w, l in zip(series, colors, edgecolors, weights, legend_labels):
   ax.hist(series, label=legend_labels, color=colors, weights=weights, **pltkwargs)
@@ -118,7 +119,9 @@ def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_li
   if normalize:
     ax2.set_ylabel('Fractional Error')
   else:
-    ax2.set_ylabel('Bias')
+    ax2.set_ylabel(r'Bias')
+  #Ensure errorbar xrange matches hist2d
+  ax2.set_xlim([bins[0],bins[-1]])
   fig,ax = plot_hist2d(x,y,xlabel='',ylabel=ylabel,title=title,cmap=cmap,plot_line=plot_line,label_boxes=label_boxes,colorbar=colorbar
                     ,fig=fig,ax=ax,**pltkwargs)
   plotters.set_style(ax2)
@@ -160,7 +163,7 @@ def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
           e = None
   return h,e
 
-def draw_confusion_matrix_binned(hist, figure_name='', class_names=[], show_counts=True, figsize=(7,5), norm_ax=0
+def draw_confusion_matrix_binned(hist, figure_name='', class_names=[], show_counts=True, figsize=(7,5), norm_ax=-1
                                  ,xlabel='True class',ylabel='Predicted class',textsize=14,rot=45):
     
     # Initialize figure
@@ -168,7 +171,10 @@ def draw_confusion_matrix_binned(hist, figure_name='', class_names=[], show_coun
     fig.patch.set_alpha(0)
     
     # Normalize the histogram counts to the total number of entries in each true class bin
-    norms     = np.sum(hist, axis=norm_ax, keepdims=True) #norm_ax = 0 for purity, norm_ax = 1 for efficiency
+    if norm_ax == -1:
+      norms = np.ones(len(hist))
+    else:
+      norms     = np.sum(hist, axis=norm_ax, keepdims=True) #norm_ax = 0 for purity, norm_ax = 1 for efficiency
     hist_norm = hist/norms
 
     # Initialize plot, fill
@@ -188,6 +194,8 @@ def draw_confusion_matrix_binned(hist, figure_name='', class_names=[], show_coun
         ax.set_yticks(np.arange(n_classes))
         ax.set_xticklabels(class_names,rotation=rot)
         ax.set_yticklabels(class_names,rotation=rot)
+    else:
+        print(f'class_names: {class_names} is a different length than n_classes: {n_classes}')
     fig.colorbar(hh)
     
     return fig,ax
