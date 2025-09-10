@@ -115,13 +115,25 @@ GIBUU_INTERACTION_MAP = {
 GIBUU_INTERACTION_MAP.update({i:'Res (s=0)' for i in range(2,32)})
 
 #Event types
+# EVENT_TYPE_LIST= {
+#   -1 : ["Unknown","unk","black"],
+#   0 : [r"$\nu_\mu$ CC","numucc","goldenrod"],
+#   1 : [r"$\nu$ NC","nc","darkgreen"],
+#   2 : [r"$\nu_e$ CC","nuecc","navy"],
+#   3 : ["Cosmic","cosmic","red"],
+#   4 : [r"Non AV $\nu$","dirt","sienna"],
+# }
+#'$\\nu_\\mu$ CC (cont.)', '$\\nu_\\mu$ CC (exit)', '$\\nu_\\mu$ CC (OOPS)', 'Non-AV', '$\\nu_e$ CC', 'NC', 'Cosmic'
+#['gold','goldenrod','purple','sienna','blue','green','red']
 EVENT_TYPE_LIST= {
   -1 : ["Unknown","unk","black"],
-  0 : [r"$\nu_\mu$ CC","numucc","goldenrod"],
-  1 : [r"$\nu$ NC","nc","darkgreen"],
-  2 : [r"$\nu_e$ CC","nuecc","navy"],
-  3 : ["Cosmic","cosmic","red"],
-  4 : [r"Non AV $\nu$","dirt","sienna"],
+  0 : [r"$\nu_\mu$ CC (cont.)","numucc_cont","gold"],
+  1 : [r"$\nu_\mu$ CC (exit.)","numucc_exit","goldenrod"],
+  2 : [r"$\nu_\mu$ CC (OOPS)","numucc_oops","purple"],
+  3 : [r"Non-AV","dirt","sienna"],
+  4 : [r"$\nu_e$ CC","nuecc","blue"],
+  5 : [r"$\nu$ NC","nc","green"],
+  6 : ["Cosmic","cosmic","red"],
 }
 
 EVENT_NAMES = [i[0] for i in EVENT_TYPE_LIST.values()]

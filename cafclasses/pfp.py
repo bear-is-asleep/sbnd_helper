@@ -135,20 +135,18 @@ class PFP(Particle):
     values = [0, 1, -1]
     self.add_cols(keys,values,conditions=conditions,fill=-1)
   
-  def add_containment(self,volume=AV):
+  def add_containment(self,volume=AV_BUFFER):
     """
     Add containment 1 or 0 for each pfp
     """
     #Set keys, conditions, and values for add_col method
     keys = [
-      'shw.cont_tpc',
       'trk.cont_tpc',
     ]
     conditions = [
-      involume(self.data.shw.start,volume=volume) & involume(self.data.shw.end,volume=volume),
       involume(self.data.trk.start,volume=volume) & involume(self.data.trk.end,volume=volume),
     ]
-    values = [True,True]
+    values = [True]
     self.add_cols(keys,values,conditions=conditions,fill=False)
   
   def add_stats(self):
@@ -348,9 +346,9 @@ class PFP(Particle):
     """
     pfp_muon = self.get_parts_from_pdg(13,remove_nan=True,use_reco=True)
     if method == 'energy':
-      best_muon = pfp_muon.data.groupby(level=[0,1,2]).apply(lambda x: x.loc[x.trk.bestenergy.idxmax()])
+      best_muon = pfp_muon.data.groupby(level=[0,1]).apply(lambda x: x.loc[x.trk.bestenergy.idxmax()])
     elif method == 'length':
-      best_muon = pfp_muon.data.groupby(level=[0,1,2]).apply(lambda x: x.loc[x.trk.len.idxmax()])
+      best_muon = pfp_muon.data.groupby(level=[0,1]).apply(lambda x: x.loc[x.trk.len.idxmax()])
     else:
       print(f'Method "{method}" not an option, choose from - "energy","length"')
       raise ValueError('Method not implemented')

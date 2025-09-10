@@ -8,7 +8,7 @@ from sbnd.general import utils
 
 class CAF:
     #-------------------- constructor/rep --------------------#
-    def __init__(self,data,prism_bins=None,pot=None,**kwargs):
+    def __init__(self,data,prism_bins=None,pot=None,livetime=None,**kwargs):
       if isinstance(data, pd.Series):
           self.data = pd.Series(data, **kwargs)
       elif isinstance(data, pd.DataFrame):
@@ -19,6 +19,7 @@ class CAF:
         raise ValueError("key structure not correct")
       self.set_prism_bins(prism_bins)
       self.pot = pot #POT to make sample
+      self.livetime = livetime #livetime to make sample
       self.key_depth = self.key_length() #depth of keys
       self.index_depth = len(self.data.index.values[0]) #depth of indices
       self.index_names = self.data.index.names #names of indices
@@ -27,6 +28,41 @@ class CAF:
       self.data.sort_index(inplace=True)
     def copy(self,deep=True):
       return CAF(self.data.copy(deep),pot=self.pot)
+    def combine(self,other,duplicate_ok=False):
+      """
+      Combine two CAFs
+      """
+      if self.pot is None:
+        pot = other.pot
+      elif other.pot is None:
+        pot = self.pot
+      else:
+        pot = self.pot + other.pot
+      if self.livetime is None:
+        livetime = other.livetime
+      elif other.livetime is None:
+        livetime = self.livetime
+      else:
+        livetime = self.livetime + other.livetime
+      #Check if there are any indices in common
+      if len(set(self.data.index.values) & set(other.data.index.values)) > 0:
+        if not duplicate_ok:
+          raise ValueError('Duplicate indices found in combined CAFs')
+        else:
+          # Add big number to the other indices - handle MultiIndex
+          if isinstance(other.data.index, pd.MultiIndex):
+              # For MultiIndex, we need to modify the first level
+              new_levels = list(other.data.index.levels)
+              new_codes = list(other.data.index.codes)
+              # Add offset to the first level
+              new_levels[0] = new_levels[0] + int(1e10)
+              other.data.index = pd.MultiIndex(levels=new_levels, codes=new_codes, names=other.data.index.names)
+          else:
+              other.data.index = other.data.index + int(1e10)
+      self.data = pd.concat([self.data,other.data],axis=0)
+      self.pot = pot
+      self.livetime = livetime
+      return self
     def __getitem__(self, item):
         data = super().__getitem__(item) #Series or dataframe get item
         return CAF(data,pot=self.pot)
@@ -150,10 +186,15 @@ class CAF:
       #print('add_cols values: ',values)
       #print('add_cols conditions: ',conditions)
       for col, condition, value in zip(cols, conditions, values):
-          #print(f'col: {col}')
-          #print(f'condition: {condition}')
-          #print(f'value: {value}')
-          self.data.loc[condition, col] = value
+          try:
+            self.data.loc[condition, col] = value
+          except:
+            print(f'col: {col}')
+            print(f'condition: {condition}')
+            print(f'value: {value}')
+            print(f'self.data.columns: {self.data.columns}')
+            raise
+            
     def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True,mask=None):
       """
       Assign bins in dataframe, either based on self or df_comp
@@ -180,6 +221,20 @@ class CAF:
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
       print(f'--scaling to POT: {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
+    def scale_to_livetime(self,nom_livetime,sample_livetime=None):
+      """
+      Scale to nominal livetime. Need sample livetime as input
+      """
+      assert sample_livetime is not None, 'sample livetime is None'
+      if sample_livetime == nom_livetime: print('WARNING: sample livetime is equal to nominal livetime')
+      if not self.check_key('genweight'): #key not in dataframe
+        keys = ['genweight']
+        self.add_key(keys)
+        cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+        self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
+      print(f'--scaling to livetime: {sample_livetime:.2e} -> {nom_livetime:.2e}')
+      self.data.genweight = self.data.genweight*nom_livetime/sample_livetime
+      self.livetime = nom_livetime
     def scale_to_prism_coeff(self,prism_coeff):
       """
       First set the prism binnings of events, then scale to the prism coefficient.

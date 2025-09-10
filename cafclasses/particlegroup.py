@@ -78,9 +78,11 @@ class ParticleGroup(CAF):
         self.assign_bins(self.prism_binning,key,df_comp=None,assign_key=assign_key,low_to_high=True)
     #-------------------- adders --------------------#
     #-------------------- getters ---------------------#
-    def get_pur_eff_f1(self,cuts=[]):
+    def get_pur_eff_f1(self,cuts=[],categories=[0,1]):
         """
         Get purity, efficiency, and f1 score from list of cuts applied
+
+        categories: list of categories that are signal
         
         Purity: signal / total events (precision)
         Efficiency: remaining signal / initial signal (recall)
@@ -94,20 +96,26 @@ class ParticleGroup(CAF):
         f1 = np.zeros(len(cuts)+1)
         
         partgrp_cut_df = self.copy().data #apply cuts to a copy
-        init_signal = partgrp_cut_df[partgrp_cut_df.truth.event_type == 0].genweight.sum() #initial number of events
-        
-        pur[0] = init_signal/partgrp_cut_df.genweight.sum()
+        init_signal = partgrp_cut_df[np.isin(partgrp_cut_df.truth.event_type,categories)].genweight.sum() #initial number of events
+        init_total = partgrp_cut_df.genweight.sum()
+
+        pur[0] = init_signal/init_total
         eff[0] = 1
         f1[0] = 1
         
+        print(f'init_signal: {init_signal}, init_total: {init_total}')
+
         if len(cuts) != 0:
             assert isinstance(cuts,list), 'cuts must be a list'
             assert isinstance(cuts[0],str), 'cuts must be a list of strings'
             for i,cut in enumerate(cuts):
                 partgrp_cut_df = partgrp_cut_df[partgrp_cut_df.cut[cut]] #apply cut
-                pur[i+1] = partgrp_cut_df[partgrp_cut_df.truth.event_type == 0].genweight.sum()/partgrp_cut_df.genweight.sum() #purity
-                eff[i+1] = partgrp_cut_df[partgrp_cut_df.truth.event_type == 0].genweight.sum()/init_signal
+                signal_events = partgrp_cut_df[np.isin(partgrp_cut_df.truth.event_type,categories)].genweight.sum()
+                total_events = partgrp_cut_df.genweight.sum()
+                pur[i+1] = signal_events/partgrp_cut_df.genweight.sum() #purity
+                eff[i+1] = signal_events/init_signal
                 f1[i+1] = 2*eff[i+1]*pur[i+1]/(eff[i+1]+pur[i+1])
+                print(f'cut: {cut}, signal_events: {signal_events}, total_events: {total_events}')
         return pur,eff,f1
     def get_events_cuts(self,cuts=[],normalize=True):
         """

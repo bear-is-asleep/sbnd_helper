@@ -85,11 +85,11 @@ class CAFSlice(ParticleGroup):
       ]
       self.apply_cut(keys[0], conditions[0], cut)
       self.apply_cut(keys[1], conditions[1], False) #Do not cut on true vertex
-    def cut_muon(self,cut=False):
+    def cut_muon(self,cut=False,min_ke=0.1):
       """
       Cut to only muon
       """
-      condition = self.data.has_muon
+      condition = self.data.has_muon & (self.data.best_muon.energy > min_ke)
       self.apply_cut('cut.muon', condition, cut)
     def cut_trk(self,cut=False):
       """
@@ -136,12 +136,13 @@ class CAFSlice(ParticleGroup):
       condition = pd.Series(False,index=self.data.index)
       condition.loc[inds] = True
       #Set values
-      best_trk_score = pfp.data.groupby(level=[0,1,2]).trackScore.max()
+      best_trk_score = pfp.data.groupby(level=[0,1]).trackScore.max()
       is_trk = pd.Series(True,index=self.data.index).values
       values = [
         True,
         best_trk_score
       ]
+      print(f'best_trk_score: {best_trk_score}')
       #Handle adding columns of differing types
       self.add_cols([keys[0]],[values[0]],conditions=condition,fill=False)
       self.add_cols([keys[1]],[values[1]],conditions=condition,fill=np.nan)
@@ -159,6 +160,20 @@ class CAFSlice(ParticleGroup):
         involume(self.data.vertex,volume=AV)
       ]
       self.add_cols(keys,values,fill=False)
+    def add_in_fv(self):
+      """
+      Add containment 1 or 0 for each pfp
+      """
+      #Set keys, values, conditions
+      keys = [
+        'truth.fv',
+        'vertex.fv'
+      ]
+      values = [
+        involume(self.data.truth.position,volume=FV),
+        involume(self.data.vertex,volume=FV)
+      ]
+      self.add_cols(keys,values,fill=False)
     def add_shws_trks(self,pfp,energy_threshold=0.):
       """
       Count the number of showers and tracks
@@ -168,18 +183,18 @@ class CAFSlice(ParticleGroup):
       inds = utils.get_sub_inds_from_inds(pfp.data.index.values,self.data.index.values,self.index_depth)
       
       #Find number of showers and tracks per slice
-      trk_counts = (pfp.data.semantic_type == 0).groupby(level=[0,1,2]).sum()
-      shw_counts = (pfp.data.semantic_type == 1).groupby(level=[0,1,2]).sum()
+      trk_counts = (pfp.data.semantic_type == 0).groupby(level=[0,1]).sum()
+      shw_counts = (pfp.data.semantic_type == 1).groupby(level=[0,1]).sum()
       
       #Find true number of showers and tracks per slice
       observable = (pfp.data.trk.truth.p.startE-pfp.data.trk.truth.p.endE) >= energy_threshold
-      true_trk_counts = ((abs(pfp.data.trk.truth.p.pdg) == 13) & observable).groupby(level=[0,1,2]).sum()\
-                  + ((abs(pfp.data.trk.truth.p.pdg) == 211) & observable).groupby(level=[0,1,2]).sum()\
-                  + ((abs(pfp.data.trk.truth.p.pdg) == 321) & observable).groupby(level=[0,1,2]).sum()\
-                  + ((abs(pfp.data.trk.truth.p.pdg) == 2212) & observable).groupby(level=[0,1,2]).sum()
-      true_shw_counts = ((abs(pfp.data.trk.truth.p.pdg) == 11) & observable).groupby(level=[0,1,2]).sum()\
-                  + ((abs(pfp.data.trk.truth.p.pdg) == 22) & observable).groupby(level=[0,1,2]).sum()\
-                  + 2*((abs(pfp.data.trk.truth.p.pdg) == 111) & observable).groupby(level=[0,1,2]).sum()
+      true_trk_counts = ((abs(pfp.data.trk.truth.p.pdg) == 13) & observable).groupby(level=[0,1]).sum()\
+                  + ((abs(pfp.data.trk.truth.p.pdg) == 211) & observable).groupby(level=[0,1]).sum()\
+                  + ((abs(pfp.data.trk.truth.p.pdg) == 321) & observable).groupby(level=[0,1]).sum()\
+                  + ((abs(pfp.data.trk.truth.p.pdg) == 2212) & observable).groupby(level=[0,1]).sum()
+      true_shw_counts = ((abs(pfp.data.trk.truth.p.pdg) == 11) & observable).groupby(level=[0,1]).sum()\
+                  + ((abs(pfp.data.trk.truth.p.pdg) == 22) & observable).groupby(level=[0,1]).sum()\
+                  + 2*((abs(pfp.data.trk.truth.p.pdg) == 111) & observable).groupby(level=[0,1]).sum()
       
       #Add to slice
       keys = [
@@ -204,7 +219,7 @@ class CAFSlice(ParticleGroup):
       Count the number of each type of particle by pdg
       """
       #Find number of each pdg per slice
-      reco = pfp.data.bestpdg.groupby(level=[0,1,2]).value_counts().unstack()
+      reco = pfp.data.bestpdg.groupby(level=[0,1]).value_counts().unstack()
       reco = reco.fillna(0)
       reco.columns = [f'reco.pdg_{i:.0f}' for i in reco.columns]
       inds = reco.index.values
@@ -216,7 +231,7 @@ class CAFSlice(ParticleGroup):
       self.data.loc[inds,cols] = reco.values
       
       #Find true number of each pdg per slice
-      true = abs(pfp.data.trk.truth.p.pdg).groupby(level=[0,1,2]).value_counts().unstack()
+      true = abs(pfp.data.trk.truth.p.pdg).groupby(level=[0,1]).value_counts().unstack()
       true = true.fillna(0)
       true.columns = [f'truth.pdg_{i:.0f}' for i in true.columns]
       inds = true.index.values
@@ -241,9 +256,14 @@ class CAFSlice(ParticleGroup):
       
       self.add_cols(keys,[visible]) 
     
-    def add_event_type(self):
+    def add_event_type(self,min_ke=0.1):
       """
       Add event type from genie type map. True event type
+
+      Parameters
+      ----------
+      min_ke : float
+        Minimum kinetic energy to be considered a muon [GeV]
       """
       iscc = self.data.truth.iscc == 1
       isnumu = self.data.truth.pdg == 14
@@ -252,9 +272,16 @@ class CAFSlice(ParticleGroup):
       isanue = self.data.truth.pdg == -12
       iscosmic = self.data.truth.pdg == -1 #masked to 1
       istrueav = self.data.truth.av #filled to bool
+      istruefv = self.data.truth.fv #filled to bool
+      ismuon = self.data.truth.muon.startE > min_ke #KE requirement
+      iscont = (self.data.truth.muon.cont_tpc == 1) | (self.data.truth.muon.cont_tpc == True) #contained, break down signal and background
       
       #aggregate true types
-      isnumuccav = iscc & (isnumu | isanumu) & istrueav & ~iscosmic #numu cc av
+      isnumuccav = iscc & (isnumu | isanumu) & istrueav & ~iscosmic & ismuon #numu cc av
+      isnumuccfv = iscc & (isnumu | isanumu) & istruefv & ~iscosmic & ismuon #numu cc fv
+      isnumuccfv_cont = isnumuccfv & iscont
+      isnumuccfv_uncont = isnumuccfv & ~iscont
+      isnumuccoops = isnumuccav & ~isnumuccfv #numu cc out of phase space (oops)
       isnueccav = iscc & (isnue | isanue) & istrueav & ~iscosmic #nue cc av
       isncav = ~iscc & istrueav & ~iscosmic #nc av
       iscosmicav = istrueav & iscosmic #cosmic av
@@ -268,18 +295,77 @@ class CAFSlice(ParticleGroup):
       ]
       self.add_key(keys,fill=-1)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
-      self.data.loc[isnumuccav,cols[0]] = 0 #numu cc
-      self.data.loc[isncav,cols[0]] = 1 #nc
-      self.data.loc[isnueccav,cols[0]] = 2 #nue cc
-      self.data.loc[iscosmic,cols[0]] = 3 #cosmic
-      self.data.loc[isdirt,cols[0]] = 4 #dirt
+      #assert total == len(self.data.loc[:,cols[0]]), f'total categorized ({total:,}) does not match the number of slices ({len(self.data.loc[:,cols[0]]):,}). Diff = {len(self.data.loc[:,cols[0]]) - total:,}.'
+      self.data.loc[isnumuccfv_cont,cols[0]] = 0 #numu cc (contained)
+      self.data.loc[isnumuccfv_uncont,cols[0]] = 1 #numu cc (uncontained)
+      self.data.loc[isnumuccoops,cols[0]] = 2 #numu cc oops
+      self.data.loc[isdirt,cols[0]] = 3 #dirt
+      self.data.loc[isnueccav,cols[0]] = 4 #nue cc
+      self.data.loc[isncav,cols[0]] = 5 #nc
+      self.data.loc[iscosmic,cols[0]] = 6 #cosmic
       #the rest are unknown
     
+    def add_true_muon(self,muon_mcprim):
+      """
+      Add the true muon to the slice
+      """
+      #Since the indices are not the same, we need to match based on the nu index
+
+      # Get all truth indices at once (vectorized)
+      nu_indices = self.data.truth.idx.values
+
+      # Create boolean mask for valid indices
+      valid_mask = nu_indices >= 0
+
+      # Get all valid indices at once
+      valid_indices = self.data.index[valid_mask]
+      valid_nu_indices = nu_indices[valid_mask]
+
+      muon_inds = list(zip(valid_indices.get_level_values(0), valid_nu_indices))
+      slc_inds = [tuple(idx) for idx in valid_indices]
+      true_muon_inds = set([(t[0],t[1]) for t in list(muon_mcprim.data.index)]) #The final index is always 0, since there can only be one muon per event
+      #Remove muon inds that are not in the truth muon
+      paired_inds = [(muon_idx,slc_idx) for muon_idx,slc_idx in list(zip(muon_inds,slc_inds)) if muon_idx in true_muon_inds]
+      #Unzip
+      muon_inds,slc_inds = zip(*paired_inds)
+      #Add extra 0 back into muon_inds
+      muon_inds = [(t[0], t[1], 0) for t in muon_inds]
+      slc_inds = list(slc_inds)
+
+      keys = [
+        'truth.muon.startE',
+        'truth.muon.endE',
+        'truth.muon.p',
+        'truth.muon.costheta',
+        'truth.muon.length',
+        'truth.muon.start.x',
+        'truth.muon.start.y',
+        'truth.muon.start.z',
+        'truth.muon.end.x',
+        'truth.muon.end.y',
+        'truth.muon.end.z',
+        'truth.muon.cont_tpc',
+      ]
+      self.add_key(keys)
+      cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+      
+      self.data.loc[slc_inds,cols[0]] = muon_mcprim.data.loc[muon_inds].startE.values
+      self.data.loc[slc_inds,cols[1]] = muon_mcprim.data.loc[muon_inds].endE.values
+      self.data.loc[slc_inds,cols[2]] = muon_mcprim.data.loc[muon_inds].genp.tot.values
+      self.data.loc[slc_inds,cols[3]] = np.cos(muon_mcprim.data.loc[muon_inds].theta.values)
+      self.data.loc[slc_inds,cols[4]] = muon_mcprim.data.loc[muon_inds].length.values
+      self.data.loc[slc_inds,cols[5]] = muon_mcprim.data.loc[muon_inds].start.x.values
+      self.data.loc[slc_inds,cols[6]] = muon_mcprim.data.loc[muon_inds].start.y.values
+      self.data.loc[slc_inds,cols[7]] = muon_mcprim.data.loc[muon_inds].start.z.values
+      self.data.loc[slc_inds,cols[8]] = muon_mcprim.data.loc[muon_inds].end.x.values
+      self.data.loc[slc_inds,cols[9]] = muon_mcprim.data.loc[muon_inds].end.y.values
+      self.data.loc[slc_inds,cols[10]] = muon_mcprim.data.loc[muon_inds].end.z.values
+      self.data.loc[slc_inds,cols[11]] = muon_mcprim.data.loc[muon_inds].cont_tpc.values
+
     def add_best_muon(self,pfp,get_best_muon=True,method='energy'):
       """
       Add the best muon to the slice
       """
-      #Get the best muon if requested
       if get_best_muon:
         pfp = pfp.get_best_muon(method=method)
       #Get slice indices in common
@@ -326,11 +412,18 @@ class CAFSlice(ParticleGroup):
         'best_muon.dazzle.pdg',
         'best_muon.truth.p.mass',
         'best_muon.truth.p.genE',
+        'best_muon.chi2_muon',
+        'best_muon.chi2_pion',
+        'best_muon.chi2_proton',
+        'best_muon.calo_energy',
       ]
       self.add_key(keys)
       cols = panda_helpers.getcolumns(keys,depth=self.key_length())
       
       #add the best muon to the slice
+      print(f'best energy: {pfp.data.trk.bestenergy}')
+      print(f'self.data.loc[inds,cols[0]]: {self.data.loc[inds,cols[0]]}')
+
       self.data.loc[inds,cols[0]] = pfp.data.trk.bestenergy
       self.data.loc[inds,cols[1]] = pfp.data.trk.bestmom
       self.data.loc[inds,cols[2]] = pfp.data.trk.theta
@@ -370,7 +463,10 @@ class CAFSlice(ParticleGroup):
       self.data.loc[inds,cols[36]] = pfp.data.trk.dazzle.pdg
       self.data.loc[inds,cols[37]] = abs(pfp.data.trk.truth.p.pdg).map(PDG_TO_MASS_MAP)
       self.data.loc[inds,cols[38]] = pfp.data.trk.truth.p.genE
-      
+      self.data.loc[inds,cols[39]] = pfp.data.trk.chi2pid.I2.chi2_muon
+      self.data.loc[inds,cols[40]] = pfp.data.trk.chi2pid.I2.chi2_pion
+      self.data.loc[inds,cols[41]] = pfp.data.trk.chi2pid.I2.chi2_proton
+      self.data.loc[inds,cols[42]] = pfp.data.shw.bestplane_energy
       #Add to slice - bool values
       keys = [
         'best_muon.cont_tpc',

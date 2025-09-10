@@ -30,14 +30,17 @@ class MCPrim(CAF):
                       ,momentum_bins=self.momentum_binning
                       ,costheta_bins=self.costheta_binning
                       ,pot=self.pot)
+    def load(fname,key='mcprim',**kwargs):
+      df = pd.read_hdf(fname,key=key,**kwargs)
+      return MCPrim(df,**kwargs)
     def postprocess(self,nu=None,drop_noninteracting=True):
       """
       Run all post processing
       """
       s0 = time()
-      self.apply_nu_cuts(nu=nu) 
-      if drop_noninteracting:
-        self.drop_noninteracting()
+      # self.apply_nu_cuts(nu=nu) 
+      # if drop_noninteracting:
+      #   self.drop_noninteracting()
       s1 = time()
       print(f'--apply cuts: {s1-s0:.2f} s')
       #self.drop_neutrinos() - this is taken care of by drop noninteracting
@@ -45,17 +48,17 @@ class MCPrim(CAF):
       self.add_nu_dir()
       self.add_nu_theta()
       self.add_theta()
-      self.add_costheta()
       self.add_momentum_mag()
+      self.add_containment()
       #self.add_tot_visE()
-      self.add_genweight(nu=nu) #generator weights
-      self.add_genmode(nu=nu) #generator modes
+      #self.add_genweight(nu=nu) #generator weights
+      #self.add_genmode(nu=nu) #generator modes
       s2 = time()
       print(f'--add variables: {s2-s1:.2f} s')
       #Assign binning
-      self.assign_prism_bins(nu=None) #use theta from incident location
-      self.assign_costheta_bins()
-      self.assign_momentum_bins()
+      #self.assign_prism_bins(nu=None) #use theta from incident location
+      #self.assign_costheta_bins()
+      #self.assign_momentum_bins()
       s3 = time()
       print(f'--assign bins: {s3-s2:.2f} s')
     def apply_nu_cuts(self,nu=None):
@@ -76,6 +79,20 @@ class MCPrim(CAF):
       Set costtheta bins
       """
       self.costheta_binning = costheta_bins
+    def add_containment(self,volume=AV_BUFFER):
+      """
+      Add containment 1 or 0 for each pfp
+      """
+      #Set keys, conditions, and values for add_col method
+      keys = [
+        'cont_tpc',
+      ]
+      conditions = [
+        involume(self.data.start,volume=volume) & involume(self.data.end,volume=volume),
+      ]
+      values = [True]
+      self.add_cols(keys,values,conditions=conditions,fill=False)
+      self.data.loc[:,keys[0]] = self.data.loc[:,keys[0]].astype(bool) #Ensure it's a boolean
       
     def add_fv(self):
       """

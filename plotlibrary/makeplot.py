@@ -8,8 +8,8 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 day = plotters.day
 
-def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,
-              **pltkwargs):
+def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,return_counts=False,
+              show_counts=True,**pltkwargs):
   """
   series is a list of pd.Series
   """
@@ -18,19 +18,26 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
     counts = [len(s) for s in series]
   else:
     counts = [round(np.sum(w)) for w in weights]
-  legend_labels = [f'{lab} ({100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
+  if show_counts:
+    legend_labels = [f'{lab} ({counts[i]:,}, {100*counts[i]/np.sum(counts):.2f}%)' for i,lab in enumerate(labels)]
+  else:
+    legend_labels = [f'{lab} ({100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
   if colors is None:
     cmap = plt.get_cmap(cmap, len(labels))
     colors = cmap(range(len(labels)))
     colors = [tuple(color) for color in colors]
   #edgecolors = [plotters.darken_color(c,factor=0.5) for c in colors]
   #for s, c, e, w, l in zip(series, colors, edgecolors, weights, legend_labels):
-  ax.hist(series, label=legend_labels, color=colors, weights=weights, **pltkwargs)
+  n, bins, patches = ax.hist(series, label=legend_labels, color=colors, weights=weights, **pltkwargs)
   ax.set_xlabel(xlabel)
   if title is not None:
     ax.set_title(title)
   ax.legend()
-  return fig,ax
+
+  if return_counts:
+    return fig, ax, counts
+  else:
+    return fig, ax
 
 def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,label_boxes=False,
                 colorbar=False,ax=None,fig=None,text_color='wb',show_frac=False,**pltkwargs):
@@ -93,7 +100,7 @@ def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_li
                          colorbar=False,normalize=False,**pltkwargs):
   """
   x,y are pd.Series
-  assume y is the true var
+  assume x is the true var
   """
   fig,(ax,ax2) = plt.subplots(2,1,figsize=(6.5,7),tight_layout=True,sharex=not colorbar,gridspec_kw={'height_ratios': [6, 1]})
   if 'bins' in pltkwargs:
@@ -107,17 +114,18 @@ def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_li
     in_range = (x > bins[i]) & (x < bins[i+1])
     _x = x[in_range]
     _y = y[in_range]
+
     if normalize:
-      statistic = (_x-_y)/_y
+      statistic = (_y-_x)/_x
     else:
-      statistic = _x-_y
+      statistic = _y-_x
     bias[i] = np.mean(statistic)
     err[i] = np.std(statistic)
   ax2.errorbar(bin_centers,bias,yerr=err,fmt='o',color='black')
   ax2.axhline(0,ls='--',color='red')
   ax2.set_xlabel(xlabel)
   if normalize:
-    ax2.set_ylabel('Fractional Error')
+    ax2.set_ylabel('Fractional\nError')
   else:
     ax2.set_ylabel(r'Bias')
   #Ensure errorbar xrange matches hist2d
@@ -183,7 +191,7 @@ def draw_confusion_matrix_binned(hist, figure_name='', class_names=[], show_coun
     hh = ax.pcolormesh(xedges, yedges, hist_norm, cmap='Blues')
     for i in range(n_classes):
         for j in range(n_classes):
-            label = '{:0.3f}\n({})'.format(hist_norm[i,j], int(hist[i,j])) if show_counts else '{:0.3f}'.format(hist_norm[i,j])
+            label = '{:0.3f}\n({:,})'.format(hist_norm[i,j], int(hist[i,j])) if show_counts else '{:0.3f}'.format(hist_norm[i,j])
             ax.text(j, i, label, color="white" if hist_norm[i,j] > 0.5 else "black", ha="center", va="center",fontsize=textsize)
             
     # Set axes style and labels
