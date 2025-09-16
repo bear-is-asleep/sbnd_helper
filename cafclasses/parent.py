@@ -1,6 +1,6 @@
 from pandas import DataFrame
 import numpy as np
-from pyanalib import panda_helpers
+from pyanalib import pandas_helpers
 from sbnd.detector.volume import *
 from sbnd.constants import *
 from sbnd.cafclasses import object_calc
@@ -55,10 +55,10 @@ class CAF:
               new_levels = list(other.data.index.levels)
               new_codes = list(other.data.index.codes)
               # Add offset to the first level
-              new_levels[0] = new_levels[0] + int(1e10)
+              new_levels[-1] = new_levels[-1] + int(1e3)
               other.data.index = pd.MultiIndex(levels=new_levels, codes=new_codes, names=other.data.index.names)
           else:
-              other.data.index = other.data.index + int(1e10)
+              other.data.index = other.data.index + int(1e3)
       self.data = pd.concat([self.data,other.data],axis=0)
       self.pot = pot
       self.livetime = livetime
@@ -108,6 +108,43 @@ class CAF:
     def load(fname,key='slice',**kwargs):
       df = pd.read_hdf(fname,key=key,**kwargs)
       return CAF(df,**kwargs)
+    #-------------------- cutters --------------------#
+    def apply_cut(self, cut_name, condition=None, cut=True):
+      """
+      Apply a cut based on a specified condition.
+
+      Parameters
+      ----------
+      cut_name : str
+          The name of the cut to apply.
+      condition : array_like
+          Boolean array where True indicates the row passes the cut.
+      cut : bool, optional
+          Whether to actually apply the cut to the data. Default is True.
+      """
+      if 'cut.' not in cut_name: #Allow us to be lazy
+          cut_name = 'cut.'+cut_name
+      if cut and self.check_key(cut_name):
+          orig_size = len(self.data)
+          cut_col = self.get_key(cut_name)
+          self.data = self.data[self.data[cut_col].values]
+          new_size = len(self.data)
+          print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
+          return
+      elif condition is None:
+          raise Exception(f'Attempting to cut on key not in data: {cut_name}')
+
+      self.add_key([cut_name],fill=False)
+      print(f'added key: {cut_name}')
+      col = pandas_helpers.getcolumns([cut_name], depth=self.key_length())[0]
+      self.data.loc[:, col] = condition
+
+      if cut:
+          orig_size = len(self.data)
+          self.data = self.data[self.data[col]]
+          new_size = len(self.data)
+          print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
+          return
     #-------------------- setters --------------------#
     #Change to setter?
     def key_length(self):
@@ -132,7 +169,7 @@ class CAF:
       """
       Add key to dataframe
       """
-      updated_df = panda_helpers.multicol_addkey(self.data, keys,fill=fill,inplace=False)
+      updated_df = pandas_helpers.multicol_addkey(self.data, keys,fill=fill,inplace=False)
       # Update the current df with the new DataFrame
       new_cols = updated_df.columns.difference(self.data.columns)
       cols_to_add = {col: updated_df[col] for col in new_cols}
@@ -173,7 +210,7 @@ class CAF:
         conditions = [conditions] #Make sure it's a list of lists
       #Convert
       self.add_key(keys, fill=fill)
-      cols = panda_helpers.getcolumns(keys, depth=self.key_length())
+      cols = pandas_helpers.getcolumns(keys, depth=self.key_length())
       #Pad cols
       if len(cols) == 1 and len(cols) < len(values):
         if pad_cols:
@@ -217,7 +254,7 @@ class CAF:
       if not self.check_key('genweight'): #key not in dataframe
         keys = ['genweight']
         self.add_key(keys)
-        cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+        cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
       print(f'--scaling to POT: {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
@@ -230,7 +267,7 @@ class CAF:
       if not self.check_key('genweight'): #key not in dataframe
         keys = ['genweight']
         self.add_key(keys)
-        cols = panda_helpers.getcolumns(keys,depth=self.key_length())
+        cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
       print(f'--scaling to livetime: {sample_livetime:.2e} -> {nom_livetime:.2e}')
       self.data.genweight = self.data.genweight*nom_livetime/sample_livetime
@@ -262,7 +299,7 @@ class CAF:
       """
       Converts key to tuple format
       """
-      return panda_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
+      return pandas_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
     def get_binned_numevents(self,bin_key,binning=None):
       """
       Get number of events per bin of some binning scheme

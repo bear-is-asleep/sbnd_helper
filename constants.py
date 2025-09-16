@@ -134,6 +134,7 @@ EVENT_TYPE_LIST= {
   4 : [r"$\nu_e$ CC","nuecc","blue"],
   5 : [r"$\nu$ NC","nc","green"],
   6 : ["Cosmic","cosmic","red"],
+  #7 : ["$\\nu_\mu$ CC","numucc","darkgoldenrod"],
 }
 
 EVENT_NAMES = [i[0] for i in EVENT_TYPE_LIST.values()]

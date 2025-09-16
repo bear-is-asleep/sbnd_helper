@@ -10,6 +10,12 @@ import numba as nb
 from itertools import chain
 import pandas as pd
 
+def calc_ke_from_momentum(momentum,mass):
+  """
+  Calculate kinetic energy from momentum and mass
+  """
+  return np.sqrt(momentum**2+mass**2)
+
 def move_file(fname,folder_name,overwrite=True):
   # Move the file to the folder
   src_file = f'{fname}'

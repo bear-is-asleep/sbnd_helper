@@ -155,6 +155,9 @@ def add_label(ax,text,where='topright',**kwargs):
             transform=ax.transAxes,
             horizontalalignment='left',
             verticalalignment='top',**kwargs)
+  elif isinstance(where,tuple) or isinstance(where,list):
+    ax.text(where[0],where[1],text,
+            transform=ax.transAxes,**kwargs)
   else:
     raise ValueError(f'Unknown location: {where}')
   

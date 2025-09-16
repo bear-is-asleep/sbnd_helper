@@ -7,7 +7,7 @@ from sbnd.flux.prism import *
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, mean_squared_log_error
 from scipy.stats import pearsonr
 import copy
-from pyanalib import panda_helpers
+from pyanalib import pandas_helpers
 #from pyanalib import panda_helpers
 
 def get_neutrino_dir(start):
