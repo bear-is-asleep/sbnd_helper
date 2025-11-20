@@ -2,6 +2,7 @@ from .particlegroup import ParticleGroup
 import pandas as pd
 from sbnd.detector.volume import *
 from pyanalib import pandas_helpers
+from .parent import filter_univ_columns
 
 class CAFInteraction(ParticleGroup):
     """
@@ -15,8 +16,10 @@ class CAFInteraction(ParticleGroup):
         return CAFInteraction(data)
     def copy(self,deep=True):
         return CAFInteraction(self.data.copy(deep))
-    def load(fname,key='evt_0',**kwargs):
+    def load(fname,key='evt_0',filter_univ=True,**kwargs):
         df = pd.read_hdf(fname,key=key,**kwargs)
+        if filter_univ:
+            df = filter_univ_columns(df)
         return CAFInteraction(df,**kwargs)
     #-------------------- setters --------------------#
     def set_mcnu_containment(self,mcnu):
@@ -25,13 +28,12 @@ class CAFInteraction(ParticleGroup):
         """
         return super().set_mcnu_containment(mcnu,'spine')
     #-------------------- cutters --------------------#
-    def cut_muon(self,cut=True,min_ke=0.1):
+    def cut_muon(self,cut=False,min_ke=0.1):
         """
         Cut muon column
         """
         #Unfortunately, the ke column is in MeV, so we need to convert to MeV for the cut
         ke = self.data.mu.ke/1000.
-        min_ke = min_ke
         self.apply_cut('cut.muon', (self.data.mu.pid == 2) & (ke > min_ke) & (self.data.mu.is_primary), cut=cut)
         if min_ke == 0.1:
             self.apply_cut('cut.truth.muon', self.data.truth.nmu_100MeV > 0, cut=False) # Never cut on truth
@@ -39,37 +41,74 @@ class CAFInteraction(ParticleGroup):
             self.apply_cut('cut.truth.muon', self.data.truth.nmu_27MeV > 0, cut=False) # Never cut on truth
         else:
             raise ValueError(f'Invalid min_ke: {min_ke}')
-    def cut_cosmic(self,cut=True):
+    def cut_cosmic(self,cut=False):
         """
         Cut cosmic column
         """
         self.apply_cut('cut.cosmic', self.data.is_flash_matched == 1, cut=cut)
         self.apply_cut('cut.truth.cosmic', (self.data.truth.pdg == -1) | (self.data.truth.pdg.isna()), cut=False) # Never cut on truth
-    def cut_cosmic_score(self,cut=True,score=102.35):
+    def cut_cosmic_score(self,cut=False,score=102.35):
         """
         Cut cosmic score column
         """
         self.apply_cut('cut.cosmic_score', self.data.flash_scores > score, cut=cut)
-    def cut_fv(self,cut=True):
+    def cut_fv(self,cut=False):
         """
         Cut fv column
         """
         self.apply_cut('cut.fv', self.data.fv == True, cut=cut)
         self.apply_cut('cut.truth.fv', self.data.truth.fv == True, cut=False) # Never cut on truth
-    def cut_start_dedx(self,cut=True,dedx=4.17):
+    def cut_start_dedx(self,cut=False,dedx=4.17):
         """
         Cut start dedx column
         """
         #Only cut if not contained
         self.apply_cut('cut.start_dedx', ((self.data.mu.start_dedx < dedx) & ~(self.data.mu.is_contained.values.astype(bool))) | (self.data.mu.is_contained), cut=cut)
-    def cut_is_cont(self,cut=True):
+    def cut_lowz(self,cut=False,z_max=6,include_start=True):
+        """
+        Cut if the start or end muon point is within
+        """
+        if include_start:
+            condition = ~((self.data.mu.start_point.z < z_max) | (self.data.mu.end_point.z < z_max))
+        else:
+            condition = self.data.mu.end_point.z > z_max
+        self.apply_cut('cut.lowz', condition, cut)
+    def cut_time_contained(self,cut=False):
+        """
+        Cut if the interaction is logically contained in TPC
+        """
+        self.apply_cut('cut.time_contained', self.data.is_time_contained_x == True, cut=cut)
+    def cut_is_cont(self,cut=False):
         """
         Cut is contained column
         """
         self.apply_cut('cut.cont', (self.data.mu.is_contained == 1) | (self.data.mu.is_contained == True), cut=cut)
         #TODO: Fix upstream replacement for is_contained_y->is_contained. Not sure why it's renamed
         self.apply_cut('cut.truth.cont', (self.data.truth.mu.is_contained_y == True) | (self.data.truth.mu.is_contained_y == 1), cut=False) # Never cut on truth
+    def cut_all(self,cont,cut=False):
+        """
+        Cut on all cuts
 
+        Parameters
+        ----------
+        cont : bool
+            Cut on containment
+        cut : bool
+            Cut on all cuts
+        """
+        print('WARNING: Ensure all cuts in this function are correct')
+        condition = self.data.cut.fv\
+            & self.data.cut.cosmic\
+            & self.data.cut.muon\
+            & self.data.cut.time_contained
+        if cont:
+            condition &= self.data.cut.cont
+        else:
+            condition &= self.data.cut.start_dedx & self.data.cut.cosmic_score & self.data.cut.lowz
+        if cut:
+            self.data = self.data[condition]
+            return
+        self.apply_cut('cut.all', condition, cut)
     #-------------------- adders --------------------#
     def add_cont(self):
         """
@@ -111,6 +150,11 @@ class CAFInteraction(ParticleGroup):
             involume(self.data.truth.position,volume=AV)
         ]
         self.add_cols(keys,values,fill=False)
+    def add_track_flipping(self):
+        """
+        Add track flipping boolean. True if start and end are correctly matched
+        """
+        return super().add_track_flipping('spine')
     def add_event_type(self,min_ke=0.1):
         """
         Add true event type

@@ -30,21 +30,21 @@ PDG_TO_MASS_MAP = {
 #GENIE enums
 GENIE_INTERACTION_MAP = {
     -np.iinfo(np.int32).max : 'kUnknownInteractionMode', #cosmics??
-    -1 : 'kUnknownInteractionMode',
-    0  : 'kQE',
-    1  : 'kRes',
-    2  : 'kDIS',
-    3  : 'kCoh',
-    4  : 'kCohElastic',
-    5  : 'kElectronScattering',
-    6  : 'kIMDAnnihilation',
-    7  : 'kInverseBetaDecay',
-    8  : 'kGlashowResonance',
-    9  : 'kAMNuGamma',
-    10 : 'kMEC',
-    11 : 'kDiffractive',
-    12 : 'kEM',
-    13 : 'kWeakMix'
+    -1 : ['kUnknownInteractionMode','Cosmic'],
+    0  : ['kQE','QE'],
+    1  : ['kRes','Res'],
+    2  : ['kDIS','DIS'],
+    3  : ['kCoh','Coh'],
+    4  : ['kCohElastic','CohElastic'],
+    5  : ['kElectronScattering','ElectronScattering'],
+    6  : ['kIMDAnnihilation','IMDAnnihilation'],
+    7  : ['kInverseBetaDecay','InverseBetaDecay'],
+    8  : ['kGlashowResonance','GlashowResonance'],
+    9  : ['kAMNuGamma','AMNuGamma'],
+    10 : ['kMEC','MEC'],
+    11 : ['kDiffractive','Diffractive'],
+    12 : ['kEM','EM'],
+    13 : ['kWeakMix','WeakMix']
 }
 
 #Genie interaction type

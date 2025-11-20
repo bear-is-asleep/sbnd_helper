@@ -1,10 +1,97 @@
 from pandas import DataFrame
 import numpy as np
+import pandas as pd
+import gc
 from pyanalib import pandas_helpers
 from sbnd.detector.volume import *
 from sbnd.constants import *
 from sbnd.cafclasses import object_calc
 from sbnd.general import utils
+
+def filter_univ_columns(df):
+    """
+    Filter out columns that contain 'univ' in any level of the MultiIndex column name.
+    This is a memory optimization since universe weights take up ~95% of the file size.
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        DataFrame with potentially MultiIndex columns
+        
+    Returns
+    -------
+    df : pd.DataFrame
+        DataFrame with 'univ' columns removed
+    """
+    if df.empty:
+        return df
+    
+    # Check if columns are MultiIndex
+    if isinstance(df.columns, pd.MultiIndex):
+        # Filter columns where no level contains 'univ'
+        # Check each column tuple - if any non-empty level contains 'univ', exclude it
+        mask = []
+        for col in df.columns:
+            has_univ = any('univ' in str(level).lower() for level in col if level)\
+              or any('ps1' in str(level).lower() for level in col if level)\
+              or any('ps2' in str(level).lower() for level in col if level)\
+              or any('ps3' in str(level).lower() for level in col if level)\
+              or any('ms1' in str(level).lower() for level in col if level)\
+              or any('ms2' in str(level).lower() for level in col if level)\
+              or any('ms3' in str(level).lower() for level in col if level)\
+              or any('cv' in str(level).lower() for level in col if level)\
+              or any('morph' in str(level).lower() for level in col if level)
+            mask.append(not has_univ)
+        filtered_df = df.loc[:, mask]
+        return filtered_df
+    else:
+        # Regular Index - check if column name contains 'univ'
+        mask = [not ('univ' in str(col).lower()) for col in df.columns]
+        return df.loc[:, mask]
+
+def load_univ_columns(fname=None, key=None, df_index=None, store=None):
+    """
+    Load only universe weight columns from an HDF5 file.
+    This allows you to add universe weights back after filtering them out for memory efficiency.
+    
+    Parameters
+    ----------
+    fname : str
+        Path to HDF5 file
+    key : str
+        HDF5 key to read from
+    df_index : pd.Index, optional
+        Index of the dataframe to align the universe weights with.
+        If None, returns universe weights with original index from the file.
+        
+    Returns
+    -------
+    univ_df : pd.DataFrame
+        DataFrame containing only universe weight columns, optionally aligned with df_index
+    """
+    assert key is not None, "HDF5 key must be provided"
+    if store is None:
+        assert fname is not None, "Either fname or store must be provided"
+        full_df = pd.read_hdf(fname, key=key)
+    else:
+        full_df = store.get(key)
+    
+    # Filter to only universe columns
+    if isinstance(full_df.columns, pd.MultiIndex):
+        mask = []
+        for col in full_df.columns:
+            has_univ = any('univ' in str(level).lower() for level in col if level)
+            mask.append(has_univ)
+        univ_df = full_df.loc[:, mask]
+    else:
+        mask = ['univ' in str(col).lower() for col in full_df.columns]
+        univ_df = full_df.loc[:, mask]
+    
+    # Align with the target index if provided (only keep rows that exist in both)
+    if df_index is not None:
+        univ_df = univ_df.reindex(df_index)
+    
+    return univ_df
 
 class CAF:
     #-------------------- constructor/rep --------------------#
@@ -146,6 +233,113 @@ class CAF:
           print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
           return
     #-------------------- setters --------------------#
+    def add_universe_weights(self, fname, keys, duplicate_ok=False, keep_patterns=None):
+        """
+        Load universe weight columns from HDF5 file(s) and add them back to the dataframe.
+        This is useful when universe weights were filtered out during loading for memory efficiency.
+        Handles multiple keys by combining them similar to how data was originally combined.
+        
+        Parameters
+        ----------
+        fname : str
+            Path to HDF5 file containing universe weights
+        keys : str or list
+            HDF5 key(s) to read from. If list, will combine universe weights from all keys.
+        duplicate_ok : bool
+            If True, handle duplicate indices the same way as combine() does (add offset).
+            Should match the duplicate_ok parameter used when combining the original data.
+            
+        Returns
+        -------
+        self : CAF
+            Returns self for method chaining
+        """
+        if isinstance(keys, str):
+            keys = [keys]
+
+        if keep_patterns is not None and not isinstance(keep_patterns, (list, tuple, set)):
+            raise TypeError('keep_patterns must be a list, tuple, or set of substrings to keep')
+
+        combined_univ = None
+        target_index = self.data.index
+
+        with pd.HDFStore(fname, mode='r') as store:
+            for i, key in enumerate(keys):
+                if key not in store:
+                    print(f'  WARNING: Key {key} not found in {fname}, skipping')
+                    continue
+
+                univ_df = load_univ_columns(fname=fname, key=key, store=store)
+                if univ_df.empty:
+                    continue
+
+                if keep_patterns:
+                    if isinstance(univ_df.columns, pd.MultiIndex):
+                        mask = []
+                        for col in univ_df.columns:
+                            col_str = '.'.join(str(level) for level in col if level)
+                            mask.append(any(pattern in col_str for pattern in keep_patterns))
+                        univ_df = univ_df.loc[:, mask]
+                    else:
+                        mask = [any(pattern in str(col) for pattern in keep_patterns) for col in univ_df.columns]
+                        univ_df = univ_df.loc[:, mask]
+                    if univ_df.empty:
+                        del univ_df
+                        gc.collect()
+                        continue
+
+                # Keep only rows that survived cuts in the working dataframe
+                if len(target_index) != len(univ_df.index) or not univ_df.index.equals(target_index):
+                    relevant_index = univ_df.index.intersection(target_index)
+                    print(f'  Keeping {len(relevant_index)}/{len(univ_df.index)} rows from {key}')
+                    if len(relevant_index) == 0:
+                        del univ_df
+                        gc.collect()
+                        continue
+                    univ_df = univ_df.loc[relevant_index]
+
+                # Handle duplicated indices within the chunk
+                if univ_df.index.duplicated().any():
+                    if duplicate_ok:
+                        univ_df = univ_df.loc[~univ_df.index.duplicated(keep='first')]
+                    else:
+                        raise ValueError(f'Duplicate indices found within universe weights for key {key}')
+
+                if combined_univ is None:
+                    combined_univ = univ_df
+                else:
+                    overlap = combined_univ.index.intersection(univ_df.index)
+                    if len(overlap) > 0 and not duplicate_ok:
+                        raise ValueError('Duplicate indices found when combining universe weights from keys. Use duplicate_ok=True if this is expected.')
+                    combined_univ = pd.concat([combined_univ, univ_df], axis=0)
+
+                del univ_df
+                gc.collect()
+
+        if combined_univ is None:
+            return self
+
+        matching_indices = combined_univ.index.intersection(self.data.index)
+        total_current = len(self.data.index)
+        total_univ = len(combined_univ.index)
+        matched = len(matching_indices)
+
+        print(f'  Universe weights: {total_univ:,} total indices, {matched:,} match current dataframe ({total_current:,} rows)')
+        if matched < total_current * 0.9:
+            print(f'  WARNING: Only {matched/total_current*100:.1f}% of indices match! This may indicate index misalignment.')
+
+        combined_univ = combined_univ.reindex(self.data.index)
+
+        nan_count = combined_univ.isna().any(axis=1).sum()
+        if nan_count > 0:
+            print(f'  WARNING: {nan_count:,} rows have NaN universe weights after alignment. This may indicate missing indices.')
+
+        self.data = pd.concat([self.data, combined_univ], axis=1)
+
+        del combined_univ
+        gc.collect()
+
+        return self
     #Change to setter?
     def key_length(self):
       return len(self.data.keys()[0])
@@ -177,10 +371,31 @@ class CAF:
     def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True):
       """
       Generalized method to add a column based on conditions and corresponding values.
-      :param keys: Names of the new columns to add.
-      :param conditions: A list of boolean conditions for each value.
-      :param values: A list of values corresponding to each condition.
+
+      Parameters
+      ----------
+      keys: list
+        Names of the new columns to add.
+      values: list
+        A list of values corresponding to each condition.
+      conditions: list
+        A list of boolean conditions for each value.
+      fill: 
+        The value to fill the new columns with.
+      pad_cols: bool
+        Whether to pad the new columns with the fill value.
       """
+
+      # Allow us to be lazy, the values should be in a list
+      if not isinstance(values, list):
+        print('WARNING: Implicitly converting values to list')
+        values = [values]
+      if not isinstance(keys, list):
+        print('WARNING: Implicitly converting keys to list')
+        keys = [keys]
+
+      if len(keys) != len(values):
+        raise ValueError(f'keys ({len(keys)}) and values ({len(values)}) must be the same length')
 
       # Determine the fill type
       fill_type = type(fill)
@@ -206,7 +421,7 @@ class CAF:
       #Verify conditions are in a list and of the right form
       if conditions is None: 
         conditions = np.full(np.shape(values),True)
-      elif len(np.shape(conditions)) == 1:
+      if len(np.shape(conditions)) == 1:
         conditions = [conditions] #Make sure it's a list of lists
       #Convert
       self.add_key(keys, fill=fill)
@@ -219,9 +434,9 @@ class CAF:
           raise ValueError(f'cols ({cols}) and values ({values}) must be the same length')
       elif len(cols) != len(values):
         raise NotImplementedError(f'cols ({len(cols)}) and values ({len(values)}) must be the same length')
-      #print('add_cols keys: ',keys)
-      #print('add_cols values: ',values)
-      #print('add_cols conditions: ',conditions)
+      # print('add_cols keys: ',keys)
+      # print('add_cols values: ',values)
+      # print('add_cols conditions: ',conditions)
       for col, condition, value in zip(cols, conditions, values):
           try:
             self.data.loc[condition, col] = value
@@ -232,13 +447,13 @@ class CAF:
             print(f'self.data.columns: {self.data.columns}')
             raise
             
-    def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True,mask=None):
+    def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True,mask=None,replace_nan=-1):
       """
       Assign bins in dataframe, either based on self or df_comp
       """
       if df_comp is None: df_comp = self.data
       if mask is not None: df_comp = df_comp[mask]
-      self.data = object_calc.get_df_from_bins(self.data,df_comp,bins,key,assign_key=assign_key,low_to_high=low_to_high)
+      self.data = object_calc.get_df_from_bins(self.data,df_comp,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
     def postprocess(self):
       """
       Run all post processing
@@ -256,7 +471,7 @@ class CAF:
         self.add_key(keys)
         cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
-      print(f'--scaling to POT: {sample_pot:.2e} -> {nom_pot:.2e}')
+      print(f'--scaling to POT ({nom_pot/sample_pot:.2e}): {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
     def scale_to_livetime(self,nom_livetime,sample_livetime=None):
       """
@@ -299,7 +514,10 @@ class CAF:
       """
       Converts key to tuple format
       """
-      return pandas_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
+      if isinstance(key, list):
+        return pandas_helpers.getcolumns(key,depth=self.key_depth) #Only provide one key
+      else:
+        return pandas_helpers.getcolumns([key],depth=self.key_depth) #Only provide one key
     def get_binned_numevents(self,bin_key,binning=None):
       """
       Get number of events per bin of some binning scheme

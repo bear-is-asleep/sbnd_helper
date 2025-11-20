@@ -5,8 +5,146 @@ from sbnd.general import plotters
 import numpy as np
 from matplotlib.colors import LogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+import pandas as pd
 
 day = plotters.day
+
+from sbnd.plotlibrary import makeplot
+from sbnd.general import plotters
+from sbnd.general import utils
+def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,**kwargs):
+    """
+    Create a histogram from a list of series each corresponding
+    to a different true event type. Data series is optional.
+
+    Parameters
+    ----------
+    series : list of pd.Series
+        List of series, each corresponding to a different true event type.
+    labels : list of str
+        List of labels, each corresponding to a different true event type.
+    dens : bool
+        If True, the histogram is normalized to a density.
+    yerr : list of float, optional
+        yerr on MC event count. Will be a hatched bar centered on the MC event count.
+    data_series : pd.Series, optional
+        Series which contains data.
+    scale_data : bool, optional
+        If True, the data series is scaled to the total number of events.
+    cut_desc : str, optional
+        Description of the cut.
+    label : str, optional
+        Label of the plot.
+    xlabel : str, optional
+        Label of the x-axis.
+    colors : list of str, optional
+        List of colors, each corresponding to a different true event type.
+    weights : list of float, optional
+        List of weights, each corresponding to a different true event type.
+    bins : int, optional
+        Number of bins in the histogram.
+    cut : str, optional
+        Cut applied to the data.
+    savename : str, optional
+        Name of the file to save the histogram.
+    stat_label : str, optional
+        Label of the statistic.
+    data_events : int, optional
+        Number of data events.
+    dens_norm : float, optional
+        Normalization factor for the density.
+    return_counts : bool, optional
+        If True, return the counts of the histogram.
+    pot_label : str, optional
+        Label of the POT.
+    **kwargs : dict
+        Additional keyword arguments.
+    
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+        Figure of the histogram.
+    ax : matplotlib.axes.Axes
+        Axes of the histogram.
+    counts : np.ndarray
+        Counts of the histogram.
+    """
+    
+    if len(series) == 0:
+        print(f'No events in series'+'\n'+f'xlabel: {xlabel}'+'\n'+f'cut: {cut}'+'\n'+f'savename: {savename}')
+        return None,None,None if not return_counts else None,None
+    if dens:
+        histtype = 'step'
+        alpha = 0.9
+    else:
+        histtype = 'barstacked'
+        alpha = 0.8
+    fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,colors=colors,weights=weights,return_counts=True
+                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,**kwargs)
+    if data_series is not None:
+        #Group data by binning, get mean and std of data series
+        bin_centers = (bins[:-1] + bins[1:]) / 2
+        data_counts = data_series.groupby(pd.cut(data_series,bins=bins)).count()
+        data_stds = np.sqrt(data_counts)
+        if dens:
+            data_counts = data_counts * (dens_norm/len(data_series))
+            data_stds = data_stds * (dens_norm/len(data_series))
+        if not dens and scale_data:
+            data_counts = data_counts * (np.sum(counts)/len(data_series))
+            data_stds = data_stds * (np.sum(counts)/len(data_series))
+        if data_events is not None:
+            data_events_label = f'Data ({utils.format_number_with_suffix(data_events)})'
+        else:
+            data_events_label = f'Data ({utils.format_number_with_suffix(data_counts.sum())})'
+        ax.errorbar(bin_centers,data_counts,yerr=None,fmt='o',color='black',label=data_events_label)
+    if yerr is not None:
+        yerr_arr = np.asarray(yerr) 
+        if len(yerr_arr) != len(bins) - 1:
+            raise ValueError('yerr must have the same length as the histogram bins')
+        #ax.errorbar(bin_centers,n_perbin,yerr=yerr_arr,fmt='o',color='black')
+        ax.bar(
+            bin_centers,
+            2 * yerr_arr,
+            bottom=n_perbin - yerr_arr,
+            align='center',
+            width=np.diff(bins),
+            facecolor='none',
+            edgecolor='gray',
+            alpha=1.,
+            linewidth=0.,
+            hatch='xxx',
+            label=yerr_label
+        )
+
+    if dens: ax.set_ylabel('Density')
+    else: ax.set_ylabel('Candidates')
+    y_lim = ax.get_ylim()
+    if y_lim[1] > 1e6: #this means scientific notation kicks on, so we need to shift the label
+      label_y_shift = 0.06
+    else:
+      label_y_shift = 0
+    #Add labels
+    plotters.add_label(ax,pot_label,where='toprightoutside',color='black',alpha=1.,fontsize=12)
+    plotters.add_label(ax,label,where=(0.01,1.07+label_y_shift) if '\n' not in label else (0.01,1.15+label_y_shift)
+      ,color='gray',alpha=0.9,fontsize=10,horizontalalignment='left',verticalalignment='top')
+    plotters.add_label(ax,stat_label,where='bottomrightoutside',fontsize=10)
+    plotters.add_label(ax,cut_desc,where='bottomrightoutside',color='black',fontsize=12)
+    #plotters.set_style(ax)
+    ax.legend(fontsize=10)
+    if savename != '':
+        if plot_dir is None:
+          raise ValueError('plot_dir is None')
+        plotters.save_plot(f'{savename}',fig=fig,folder_name=plot_dir)
+        if close:
+            plt.close('all')
+    else:
+      plt.show()
+    if return_counts:
+      return fig,ax,n_perbin
+    else:
+      return fig,ax
+    return fig,ax
 
 def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,return_counts=False,
               show_counts=True,**pltkwargs):
@@ -18,8 +156,9 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
     counts = [len(s) for s in series]
   else:
     counts = [round(np.sum(w)) for w in weights]
+  counts_str = [utils.format_number_with_suffix(c) for c in counts]
   if show_counts:
-    legend_labels = [f'{lab} ({counts[i]:,}, {100*counts[i]/np.sum(counts):.2f}%)' for i,lab in enumerate(labels)]
+    legend_labels = [f'{lab} ({counts_str[i]}, {100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
   else:
     legend_labels = [f'{lab} ({100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
   if colors is None:
@@ -29,13 +168,14 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
   #edgecolors = [plotters.darken_color(c,factor=0.5) for c in colors]
   #for s, c, e, w, l in zip(series, colors, edgecolors, weights, legend_labels):
   n, bins, patches = ax.hist(series, label=legend_labels, color=colors, weights=weights, **pltkwargs)
+  n = [_n[-1] for _n in n.T] # Convert to list of last elements of each bin, which is the total number of events in each bin
   ax.set_xlabel(xlabel)
   if title is not None:
     ax.set_title(title)
-  ax.legend()
+  #ax.legend()
 
   if return_counts:
-    return fig, ax, counts
+    return fig, ax, counts, n
   else:
     return fig, ax
 

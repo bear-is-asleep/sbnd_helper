@@ -10,11 +10,71 @@ import numba as nb
 from itertools import chain
 import pandas as pd
 
+def format_number_with_suffix(num,assert_greater_than_1=False):
+    """
+    Format a number with appropriate suffix (k, M, B, etc.) and 3 significant figures.
+    
+    Parameters
+    ----------
+    num : float or int
+        Number to format
+        
+    Returns
+    -------
+    str
+        Formatted string with suffix
+    """
+    if assert_greater_than_1 and num < 1:
+        raise ValueError(f"Number {num} is not greater than 1")
+    if num == 0:
+        return "0.00"
+    
+    # Handle negative numbers
+    sign = "-" if num < 0 else ""
+    num = abs(num)
+    
+    # Define suffixes and their corresponding powers of 1000
+    suffixes = [
+        (1e12, 'T'),  # Trillion
+        (1e9, 'B'),   # Billion
+        (1e6, 'M'),   # Million
+        (1e3, 'k'),   # Thousand
+        (1, '')       # No suffix
+    ]
+    
+    # Find the appropriate suffix
+    for threshold, suffix in suffixes:
+        if num >= threshold:
+            # Scale the number
+            scaled_num = num / threshold
+            
+            # Format to 3 significant figures
+            if scaled_num >= 100:
+                # 3 digits before decimal: 123.4 -> 123
+                formatted = f"{scaled_num:.0f}"
+            elif scaled_num >= 10:
+                # 2 digits before decimal: 12.34 -> 12.3
+                formatted = f"{scaled_num:.1f}"
+            else:
+                # 1 digit before decimal: 1.234 -> 1.23
+                formatted = f"{scaled_num:.2f}"
+            
+            return f"{sign}{formatted}{suffix}"
+    
+    # Fallback for very small numbers
+    return f"{sign}{num:.2e}"
+
 def calc_ke_from_momentum(momentum,mass):
   """
   Calculate kinetic energy from momentum and mass
   """
-  return np.sqrt(momentum**2+mass**2)
+  return np.sqrt(momentum**2+mass**2) - mass
+
+def calc_momentum_from_ke(ke,mass):
+  """
+  Calculate momentum from kinetic energy and mass
+  """
+  return np.sqrt((ke+mass)**2-mass**2)
 
 def move_file(fname,folder_name,overwrite=True):
   # Move the file to the folder
@@ -211,3 +271,53 @@ def calculate_fwhm_from_histogram(x, **kwargs):
     fwhm = bin_centers[last_index] - bin_centers[first_index]
     
     return fwhm
+
+import numpy as np
+
+def extract_parameter_name(key,variables):
+    """
+    Extract the essential parameter name from a systematic key.
+    
+    Parameters
+    ----------
+    key : str
+        The full systematic key
+    variables : list
+        The variable names we are evaluating systematic uncertainties for
+        
+    Returns
+    -------
+    key : str
+        The essential parameter name
+    var_name : str
+        The variable name we are evaluating systematic uncertainties for
+    """
+    #If it's a csv name, remove the .csv. We also expect the name to be in the format of {name}_{variable}_cv.csv
+    if '.csv' in key:
+      key = key.replace('.csv', '')
+      keep = key.split('_')[:-1]
+      key = '_'.join(keep)
+
+    for var in variables:
+      if var in key:
+        var_name = var
+        break
+    
+    #First check if it's a stat error
+    if 'stat' in key:
+      return 'stat',var_name
+    
+    # Remove the trailing ";1" first
+    key = key.replace(';1', '')
+    key = key.replace('reco_leading_muon_', '')
+    key = key.replace('true_leading_muon_', '')
+    key = key.replace('momentum_gev', '')
+    key = key.replace('costheta', '')
+    key = key.replace('multisigma_', '')
+    key = key.replace('multisim_', '')
+    key = key.replace('nsigma_', '')
+    key = key.replace('GENIEReWeight_SBN_v1_', '')
+    #Remove trailing _
+    while key[-1] == '_':
+      key = key[:-1]
+    return key, var_name

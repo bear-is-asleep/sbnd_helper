@@ -155,6 +155,11 @@ def add_label(ax,text,where='topright',**kwargs):
             transform=ax.transAxes,
             horizontalalignment='left',
             verticalalignment='top',**kwargs)
+  elif where == 'topleftoutsidepad':
+    ax.text(0.01,1.15,text,
+            transform=ax.transAxes,
+            horizontalalignment='left',
+            verticalalignment='top',**kwargs)
   elif isinstance(where,tuple) or isinstance(where,list):
     ax.text(where[0],where[1],text,
             transform=ax.transAxes,**kwargs)
@@ -162,9 +167,9 @@ def add_label(ax,text,where='topright',**kwargs):
     raise ValueError(f'Unknown location: {where}')
   
 
-def get_colors(cmap, n):
+def get_colors(cmap, n,max_color=1.0,min_color=0.0):
     cmap = plt.get_cmap(cmap)
-    colors = [cmap(i/n) for i in range(n)]
+    colors = [cmap(min_color + (max_color - min_color) * (i/(n-1) if n > 1 else 0)) for i in range(n)]
     return colors
   
 def convert_list_of_colors_to_hex(colors):

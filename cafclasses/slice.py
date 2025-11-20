@@ -22,8 +22,11 @@ class CAFSlice(ParticleGroup):
                       ,pot=self.pot)
     def copy(self,deep=True):
       return CAFSlice(self.data.copy(deep),pot=self.pot,prism_bins=self.prism_binning)
-    def load(fname,key='slice',**kwargs):
+    def load(fname,key='slice',filter_univ=True,**kwargs):
       df = pd.read_hdf(fname,key=key,**kwargs)
+      if filter_univ:
+        from .parent import filter_univ_columns
+        df = filter_univ_columns(df)
       return CAFSlice(df,**kwargs)
     #-------------------- setters --------------------#
     def set_mcnu_containment(self,mcnu):
@@ -46,7 +49,7 @@ class CAFSlice(ParticleGroup):
       condition = self.data.nu_score >= 0
       self.apply_cut('cut.has_nuscore', condition, cut)
     
-    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,use_opt0=False,cut=False,use_isclearcosmic=True):
+    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,use_opt0=False,cut=False,use_isclearcosmic=False):
       """
       Cut to only cosmic tracks
       """
@@ -80,18 +83,36 @@ class CAFSlice(ParticleGroup):
 
       self.apply_cut('cut.cosmic', condition, cut)
       self.apply_cut('cut.truth.cosmic', (self.data.slc.truth.pdg == -1) | (self.data.slc.truth.pdg.isna()), cut=False) # Never cut on truth
+    def cut_flashmatch(self,cut=False,use_isclearcosmic=True):
+      """
+      Find each slice in an event and mark the one with the highest score as True
+      """
+      scores = self.data.slc.opt0.score
+      inds = scores.groupby(level=['__ntuple','entry']).idxmax(skipna=True)
+      # Drop any NaN results (groups where all values were NA)
+      inds = inds.dropna()
+      
+      # Set condition
+      condition = pd.Series(False, index=self.data.index)
+      condition.loc[inds.values] = True
+      
+      if use_isclearcosmic:
+        condition &= self.data.slc.is_clear_cosmic != 1
+      self.apply_cut('cut.flashmatch', condition, cut)
+      
     def cut_fv(self,volume=FV,cut=False):
       """
       Cut to only in fv
       """
       self.apply_cut('cut.fv', self.data.vertex.fv == True, cut=cut)
       self.apply_cut('cut.truth.fv', self.data.slc.truth.fv == True, cut=False) # Never cut on truth
-    def cut_muon(self,cut=False,min_ke=0.1):
+    def cut_muon(self,cut=False,min_ke=0.1,suffix=""):
       """
       Cut to only muon
       """
-      min_p = utils.calc_ke_from_momentum(min_ke,PDG_TO_MASS_MAP[13])
-      condition = self.data.has_muon & (self.data.mu.pfp.trk.P.p_muon > min_p)
+      cols = self.get_key([f'mu{suffix}.pfp.trk.P.p_muon{suffix}',f'has_muon{suffix}'])
+      min_p = utils.calc_momentum_from_ke(min_ke,PDG_TO_MASS_MAP[13])
+      condition = self.loc[:,col[1]] & (self.loc[:,col[0]] > min_p)
       self.apply_cut('cut.muon', condition, cut)
       if min_ke == 0.1:
         self.apply_cut('cut.truth.muon', self.data.slc.truth.nmu_100MeV > 0, cut=False) # Never cut on truth
@@ -99,24 +120,49 @@ class CAFSlice(ParticleGroup):
         self.apply_cut('cut.truth.muon', self.data.slc.truth.nmu_27MeV > 0, cut=False) # Never cut on truth
       else:
         raise ValueError(f'Invalid min_ke: {min_ke}')
-    def cut_all(self,cut=False):
+    def cut_lowz(self,cut=False,z_max=6,include_start=True,suffix=""):
+      """
+      Cut if the start or end muon point is within
+      """
+      cols = self.get_key([f'mu{suffix}.pfp.trk.start.z{suffix}',f'mu{suffix}.pfp.trk.end.z{suffix}'])
+      if include_start:
+        condition = ~((self.loc[:,cols[0]] < z_max) | (self.loc[:,cols[1]] < z_max))
+      else:
+        condition = self.loc[:,cols[1]] > z_max
+      self.apply_cut('cut.lowz', condition, cut)
+    def cut_all(self,cont=False,cut=False):
       """
       add a column that is true if all cuts are true
       """
+      print('WARNING: Ensure all cuts in this function are correct')
       condition = self.data.cut.fv\
         & self.data.cut.cosmic\
-        & self.data.cut.muon
+        & self.data.cut.muon\
+        & self.data.cut.flashmatch
+      if cont:
+        condition &= self.data.cut.cont
+      else:
+        condition &= self.data.cut.lowz
+      if cut:
+        self.data = self.data[condition]
+        return
       self.apply_cut('cut.all', condition, cut)
     #-------------------- adders --------------------#
-    def add_has_muon(self):
+    def add_track_flipping(self):
+      """
+      Add track flipping boolean. True if start and end are correctly matched
+      """
+      return super().add_track_flipping('pandora')
+    def add_has_muon(self,suffix=""):
       """
       Check if there is a muon
       """
 
+      col = self.get_key(f'mu{suffix}.pfp.trk.is_muon{suffix}')
       # Set keys, conditions and values
-      keys = ['has_muon']
+      keys = [f'has_muon{suffix}']
       #Get slices with muons
-      inds = self.data[self.data.mu.pfp.trk.is_muon == True].index
+      inds = self.data[self.loc[:,col] == True].index
       #Set condition
       condition = pd.Series(False,index=self.data.index)
       condition.loc[inds] = True
@@ -150,7 +196,7 @@ class CAFSlice(ParticleGroup):
       ]
       self.add_cols(keys,values,fill=False) 
    
-    def add_event_type(self,min_ke=0.1):
+    def add_event_type(self,min_ke=0.1,suffix=""):
       """
       Add event type from genie type map. True event type
 
@@ -173,7 +219,8 @@ class CAFSlice(ParticleGroup):
         ismuon = self.data.slc.truth.nmu_27MeV > 0 #KE requirement
       else:
         raise ValueError(f'Invalid min_ke: {min_ke}')
-      iscont = (self.data.mu.pfp.trk.truth.p.contained ==1) | (self.data.mu.pfp.trk.truth.p.contained == True) #contained, break down signal and background
+      cols = self.get_key([f'mu{suffix}.pfp.trk.truth.p.contained{suffix}'])
+      iscont = (self.loc[:,cols[0]] ==1) | (self.loc[:,cols[0]] == True) #contained, break down signal and background
       
       #aggregate true types
       isnumuccav = iscc & (isnumu | isanumu) & istrueav & ~iscosmic #numu cc av

@@ -8,7 +8,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, m
 from scipy.stats import pearsonr
 import copy
 from pyanalib import pandas_helpers
-#from pyanalib import panda_helpers
+#from pyanalib import pandas_helpers
 
 def get_neutrino_dir(start):
   """
@@ -163,7 +163,7 @@ def split_df_into_bins(df,df_comp,bins,key,low_to_high=True):
   df_comp_ind_depth = len(df_comp.index.values[0])
   
   #Get key into tuple format
-  key = panda_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
+  key = pandas_helpers.getcolumns([key],depth=len(df_comp.keys()[0]))[0]
   df_inds_set = set(df.index.values)
   dfs_list = [None]*(len(bins)-1)
   for i,b in enumerate(bins):
@@ -200,8 +200,8 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True,n
 
     # Convert key to the appropriate format if it's not already a string
     if ntuple_keys:
-        key = panda_helpers.getcolumns([key], depth=len(df_comp.keys()[0]))[0]
-        assign_key = panda_helpers.getcolumns([assign_key], depth=len(df.keys()[0]))[0]
+        key = pandas_helpers.getcolumns([key], depth=len(df_comp.keys()[0]))[0]
+        assign_key = pandas_helpers.getcolumns([assign_key], depth=len(df.keys()[0]))[0]
 
     if not low_to_high:
       bins = sorted(bins) #sort bins in ascending order
