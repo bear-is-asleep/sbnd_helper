@@ -15,8 +15,18 @@ class NU(CAF):
         data = super().__getitem__(item) #Series or dataframe get item
         return NU(data)
   def load(fname,key='mcnu',**kwargs):
-      df = pd.read_hdf(fname,key=key,**kwargs)
-      return NU(df,**kwargs)
+    if isinstance(key,list):
+      for i,k in enumerate(key):
+        if i == 0:
+          thisnu = NU(pd.read_hdf(fname,key=k,**kwargs),**kwargs)
+        else:
+          thisnu.combine(NU(pd.read_hdf(fname,key=k,**kwargs),**kwargs))
+      return thisnu
+    elif isinstance(key,str):
+      thisnu = NU(pd.read_hdf(fname,key=key,**kwargs),**kwargs)
+      return thisnu
+    else:
+      raise ValueError(f'Invalid key: {key}')
   def add_av(self):
     """
     Add containment 1 or 0 for interaction
@@ -24,9 +34,9 @@ class NU(CAF):
     keys = [
       'av',
     ]
-    self.add_key(keys)
+    self.add_key(keys, fill=False)
     cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0]] = involume(self.data.position,volume=AV)
+    self.data.loc[:,cols[0]] = involume(self.data.position,volume=AV).astype(bool)
   def add_fv(self):
     """
     Add containment 1 or 0 for interaction in the fiducial volume
@@ -34,9 +44,9 @@ class NU(CAF):
     keys = [
       'fv',
     ]
-    self.add_key(keys)
+    self.add_key(keys, fill=False)
     cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0]] = involume(self.data.position,volume=FV)
+    self.data.loc[:,cols[0]] = involume(self.data.position,volume=FV).astype(bool)
   def add_nudir(self):
     """
     add nu direction
@@ -59,7 +69,7 @@ class NU(CAF):
     self.data.loc[:,cols[0]] = np.arccos(self.data.nu_dir.z)
     if convert_to_deg:
       self.data.loc[:,cols[0]] = self.data.loc[:,cols[0]]*180/np.pi #usefule for prism
-  def add_event_type(self,algo,min_ke=0.1):
+  def add_event_type(self,algo,min_ke=0.1,suffix=""):
     """
     Add event type
 
@@ -83,9 +93,11 @@ class NU(CAF):
     else:
       raise ValueError(f'Invalid min_ke: {min_ke}')
     if algo == 'pandora':
-      iscont = (self.data.mu.is_pandora_contained == 1) | (self.data.mu.is_pandora_contained == True) #contained, break down signal and background
+      col = self.get_key(f'mu{suffix}.is_pandora_contained')[0]
+      iscont = (self.data.loc[:,col] == 1) | (self.data.loc[:,col] == True) #contained, break down signal and background
     elif algo == 'spine':
-      iscont = (self.data.mu.is_spine_contained == 1) | (self.data.mu.is_spine_contained == True) #contained, break down signal and background
+      col = self.get_key(f'mu{suffix}.is_spine_contained')[0]
+      iscont = (self.data.loc[:,col] == 1) | (self.data.loc[:,col] == True) #contained, break down signal and background
     else:
       raise ValueError(f'Invalid algo: {algo}')
     

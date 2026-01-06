@@ -142,6 +142,21 @@ EVENT_IDS = list(EVENT_TYPE_LIST.keys())
 EVENT_COLORS = [i[2] for i in EVENT_TYPE_LIST.values()]
 EVENT_LABELS = [i[1] for i in EVENT_TYPE_LIST.values()]
 
+PARTICLE_TYPE_LIST = {
+  -1 : ["Unknown","unk","black"],
+  11 : [r"$e$","electron","blue"],
+  22 : ["Photon","photon","purple"],
+  13 : [r"$\mu$","muon","gold"],
+  211 : [r"$\pi^\pm$","pi","green"],
+  2212 : [r"$p$","proton","red"],
+  321 : [r"$K^\pm$","kaon","purple"],
+}
+
+PARTICLE_NAMES = [i[0] for i in PARTICLE_TYPE_LIST.values()]
+PARTICLE_PDGS = list(PARTICLE_TYPE_LIST.keys())
+PARTICLE_COLORS = [i[2] for i in PARTICLE_TYPE_LIST.values()]
+PARTICLE_LABELS = [i[1] for i in PARTICLE_TYPE_LIST.values()]
+
 #Semantic types for pandora
 SEMANITC_TYPE_MAP = {
   -1 : "Unknown", #probably cosmic

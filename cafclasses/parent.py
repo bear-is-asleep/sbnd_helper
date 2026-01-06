@@ -108,6 +108,9 @@ class CAF:
       self.pot = pot #POT to make sample
       self.livetime = livetime #livetime to make sample
       self.key_depth = self.key_length() #depth of keys
+      if len(self.data.index.values) == 0:
+        print(f'WARNING: No data for CAF')
+        return None
       self.index_depth = len(self.data.index.values[0]) #depth of indices
       self.index_names = self.data.index.names #names of indices
       self.check_for_duplicates() #assert there are no indexing duplicates 
@@ -115,9 +118,23 @@ class CAF:
       self.data.sort_index(inplace=True)
     def copy(self,deep=True):
       return CAF(self.data.copy(deep),pot=self.pot)
-    def combine(self,other,duplicate_ok=False):
+    def combine(self,other,duplicate_ok=False,offset=int(1e5)):
       """
       Combine two CAFs
+
+      Parameters
+      ----------
+      other : CAF
+        The other CAF to combine with.
+      duplicate_ok : bool
+        If True, handle duplicate indices the same way as combine() does (add offset).
+      offset : int
+        The offset to add to the indices of the other CAF.
+
+      Returns
+      -------
+      self : CAF
+        Returns self for method chaining
       """
       if self.pot is None:
         pot = other.pot
@@ -142,10 +159,10 @@ class CAF:
               new_levels = list(other.data.index.levels)
               new_codes = list(other.data.index.codes)
               # Add offset to the first level
-              new_levels[-1] = new_levels[-1] + int(1e3)
+              new_levels[-1] = new_levels[-1] + offset
               other.data.index = pd.MultiIndex(levels=new_levels, codes=new_codes, names=other.data.index.names)
           else:
-              other.data.index = other.data.index + int(1e3)
+              other.data.index = other.data.index + offset
       self.data = pd.concat([self.data,other.data],axis=0)
       self.pot = pot
       self.livetime = livetime
@@ -222,7 +239,7 @@ class CAF:
           raise Exception(f'Attempting to cut on key not in data: {cut_name}')
 
       self.add_key([cut_name],fill=False)
-      print(f'added key: {cut_name}')
+      #print(f'added key: {cut_name}')
       col = pandas_helpers.getcolumns([cut_name], depth=self.key_length())[0]
       self.data.loc[:, col] = condition
 
@@ -450,10 +467,27 @@ class CAF:
     def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True,mask=None,replace_nan=-1):
       """
       Assign bins in dataframe, either based on self or df_comp
+      When mask is provided, only assigns bins to masked rows, preserving existing values for other rows
       """
-      if df_comp is None: df_comp = self.data
-      if mask is not None: df_comp = df_comp[mask]
-      self.data = object_calc.get_df_from_bins(self.data,df_comp,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
+      if df_comp is None: 
+        df_comp = self.data
+      
+      if mask is not None: 
+        # Filter df_comp to masked rows only
+        df_comp_masked = df_comp[mask]
+        
+        # Get bins only for the masked subset
+        data_masked = self.data[mask].copy()
+        result_masked = object_calc.get_df_from_bins(data_masked,df_comp_masked,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
+        
+        # Get the converted column name (get_df_from_bins converts assign_key internally)
+        assign_key_col = self.get_key(assign_key)[0] if assign_key is not None else 'binning'
+        
+        # Only assign to the masked rows, preserving existing values for other rows
+        self.data.loc[mask, assign_key_col] = result_masked[assign_key_col].values
+      else:
+        # No mask - assign to entire dataframe
+        self.data = object_calc.get_df_from_bins(self.data,df_comp,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
     def postprocess(self):
       """
       Run all post processing
@@ -484,7 +518,7 @@ class CAF:
         self.add_key(keys)
         cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
-      print(f'--scaling to livetime: {sample_livetime:.2e} -> {nom_livetime:.2e}')
+      print(f'--scaling to livetime ({nom_livetime/sample_livetime:.2e}): {sample_livetime:.2e} --> {nom_livetime:.2e}')
       self.data.genweight = self.data.genweight*nom_livetime/sample_livetime
       self.livetime = nom_livetime
     def scale_to_prism_coeff(self,prism_coeff):

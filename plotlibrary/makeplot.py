@@ -13,7 +13,7 @@ from sbnd.plotlibrary import makeplot
 from sbnd.general import plotters
 from sbnd.general import utils
 def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
-                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,**kwargs):
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,**kwargs):
     """
     Create a histogram from a list of series each corresponding
     to a different true event type. Data series is optional.
@@ -58,6 +58,14 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
         If True, return the counts of the histogram.
     pot_label : str, optional
         Label of the POT.
+    legend : bool, optional
+        If True, show the legend.
+    show_counts : bool, optional
+        If True, show the counts in the legend.
+    show_pcts : bool, optional
+        If True, show the percentages in the legend.
+    bin_centers : list of float, optional
+        List of bin centers. If None, the bin centers are calculated from the bins.
     **kwargs : dict
         Additional keyword arguments.
     
@@ -80,11 +88,18 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
     else:
         histtype = 'barstacked'
         alpha = 0.8
+    if isinstance(bins,int):
+      _mins = [np.min(s) for s in series]
+      _maxs = [np.max(s) for s in series]
+      _min = np.min(_mins)
+      _max = np.max(_maxs)
+      bins = np.linspace(_min,_max,bins+1)
     fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,colors=colors,weights=weights,return_counts=True
-                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,**kwargs)
+                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,show_counts=show_counts,show_pcts=show_pcts,**kwargs)
     if data_series is not None:
         #Group data by binning, get mean and std of data series
-        bin_centers = (bins[:-1] + bins[1:]) / 2
+        if bin_centers is None:
+          bin_centers = (bins[:-1] + bins[1:]) / 2
         data_counts = data_series.groupby(pd.cut(data_series,bins=bins)).count()
         data_stds = np.sqrt(data_counts)
         if dens:
@@ -93,18 +108,21 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
         if not dens and scale_data:
             data_counts = data_counts * (np.sum(counts)/len(data_series))
             data_stds = data_stds * (np.sum(counts)/len(data_series))
-        if data_events is not None:
-            data_events_label = f'Data ({utils.format_number_with_suffix(data_events)})'
+        if show_counts:
+          if data_events is not None:
+              data_events_label = f'Data ({utils.format_number_with_suffix(data_events)})'
+          else:
+              data_events_label = f'Data ({utils.format_number_with_suffix(data_counts.sum())})'
         else:
-            data_events_label = f'Data ({utils.format_number_with_suffix(data_counts.sum())})'
-        ax.errorbar(bin_centers,data_counts,yerr=None,fmt='o',color='black',label=data_events_label)
+          data_events_label = None
+        ax.errorbar(bin_centers,data_counts,yerr=data_stds,fmt='o',color='black',label=data_events_label)
     if yerr is not None:
         yerr_arr = np.asarray(yerr) 
         if len(yerr_arr) != len(bins) - 1:
             raise ValueError('yerr must have the same length as the histogram bins')
         #ax.errorbar(bin_centers,n_perbin,yerr=yerr_arr,fmt='o',color='black')
         ax.bar(
-            bin_centers,
+            (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
             2 * yerr_arr,
             bottom=n_perbin - yerr_arr,
             align='center',
@@ -131,15 +149,16 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
     plotters.add_label(ax,stat_label,where='bottomrightoutside',fontsize=10)
     plotters.add_label(ax,cut_desc,where='bottomrightoutside',color='black',fontsize=12)
     #plotters.set_style(ax)
-    ax.legend(fontsize=10)
+    if legend:
+      ax.legend(fontsize=10)
     if savename != '':
         if plot_dir is None:
           raise ValueError('plot_dir is None')
         plotters.save_plot(f'{savename}',fig=fig,folder_name=plot_dir)
         if close:
             plt.close('all')
-    else:
-      plt.show()
+    #else:
+    #  plt.show()
     if return_counts:
       return fig,ax,n_perbin
     else:
@@ -147,7 +166,7 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
     return fig,ax
 
 def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,return_counts=False,
-              show_counts=True,**pltkwargs):
+              show_counts=True,show_pcts=True,**pltkwargs):
   """
   series is a list of pd.Series
   """
@@ -157,10 +176,14 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
   else:
     counts = [round(np.sum(w)) for w in weights]
   counts_str = [utils.format_number_with_suffix(c) for c in counts]
-  if show_counts:
+  if show_counts and show_pcts:
     legend_labels = [f'{lab} ({counts_str[i]}, {100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
-  else:
+  elif show_pcts:
     legend_labels = [f'{lab} ({100*counts[i]/np.sum(counts):.1f}%)' for i,lab in enumerate(labels)]
+  elif show_counts:
+    legend_labels = [f'{lab} ({counts_str[i]})' for i,lab in enumerate(labels)]
+  else:
+    legend_labels = labels
   if colors is None:
     cmap = plt.get_cmap(cmap, len(labels))
     colors = cmap(range(len(labels)))
@@ -276,7 +299,7 @@ def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_li
   return fig,(ax,ax2)
     
 
-def plot_hist_edges(edges,values,errors,label,ax=None,**pltkwargs):
+def plot_hist_edges(edges,values,errors=None,label=None,ax=None,**pltkwargs):
   """
   Make step plot from edges and values
   

@@ -1,7 +1,7 @@
 import numpy as np
 from pandas import DataFrame
 import pandas as pd
-from pyanalib import panda_helpers
+from pyanalib import pandas_helpers
 from sbnd.cafclasses.object_calc import *
 from sbnd.detector.volume import *
 from sbnd.constants import *
@@ -32,8 +32,17 @@ class PFP(Particle):
     """
     Load data from hdf5 file
     """
-    df = pd.read_hdf(fname,key=key,**kwargs)
-    return PFP(df,**kwargs)
+    if isinstance(key,list):
+      for i,k in enumerate(key):
+        if i == 0:
+          thispfp = PFP(pd.read_hdf(fname,key=k,**kwargs))
+        else:
+          thispfp.combine(PFP(pd.read_hdf(fname,key=k,**kwargs)))
+      return thispfp
+    elif isinstance(key,str):
+      thispfp = PFP(pd.read_hdf(fname,key=key,**kwargs))
+    else:
+      raise ValueError(f'Invalid key: {key}')
   #-------------------- helpers --------------------#
   def classify_semantics(self,method='naive',threshold=0.5):
     """

@@ -10,6 +10,24 @@ import numba as nb
 from itertools import chain
 import pandas as pd
 
+def get_sys_keys(pattern,keys):
+  sys_keys = []
+  for k in keys:
+    for t in k: #tuple
+      if pattern in t:
+        sys_keys.append(k)
+  return sys_keys
+
+def get_weights_from_sys_keys(sys_keys,data):
+  """
+  Get the weights from the systematic keys
+  """
+  weights = []
+  for key in sys_keys:
+    weights.append(data.truth[key].values)
+  return np.array(weights).T
+
+
 def format_number_with_suffix(num,assert_greater_than_1=False):
     """
     Format a number with appropriate suffix (k, M, B, etc.) and 3 significant figures.

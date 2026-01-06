@@ -36,4 +36,4 @@ ARGON_DENSITY = ARGON_MASS_DENSITY/ARGON_MOLAR_MASS*AVOGADRO_CONSTANT #n_argon/c
 NUMBER_TARGETS = ARGON_DENSITY*SBND_VOLUME*NUMBER_NUCLEONS #Number of argon targets in active volume
 FV_VOLUME = np.prod([i[1]-i[0] for i in FV]) #cm^3
 FV_AREA = np.prod([i[1]-i[0] for i in FV[1:]]) #cm^2
-NUMBER_TARGETS_FV = ARGON_DENSITY*FV_VOLUME*NUMBER_NUCLEONS #Number of argon targets in fiducial volume
+NUMBER_TARGETS_FV = ARGON_DENSITY*FV_VOLUME*NUMBER_NUCLEONS #Number of nucleon targets in fiducial volume

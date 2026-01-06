@@ -14,7 +14,7 @@ class ParticleGroup(CAF):
     #-------------------- cutters --------------------#
     #-------------------- assigners --------------------#
     #-------------------- adders --------------------#
-    def add_track_flipping(self,algo):
+    def add_track_flipping(self,algo,suffix=""):
         """
         Add track flipping boolean. True if start and end are correctly matched
 
@@ -23,21 +23,26 @@ class ParticleGroup(CAF):
         algo: str
           Algorithm to use for event type. Either 'pandora' or 'spine'
         """
+        def _get_vector(prefix):
+            axes = ['x','y','z']
+            cols = self.get_key([f'{prefix}.{axis}' for axis in axes])
+            return np.column_stack([self.data.loc[:,col].values for col in cols])
+
         if algo == 'pandora':
-            start = self.data.mu.pfp.trk.start
-            true_start = self.data.mu.pfp.trk.truth.p.start
-            true_end = self.data.mu.pfp.trk.truth.p.end
+            start = _get_vector(f'mu{suffix}.pfp.trk.start')
+            true_start = _get_vector(f'mu{suffix}.pfp.trk.truth.p.start')
+            true_end = _get_vector(f'mu{suffix}.pfp.trk.truth.p.end')
             keys = [f'mu.pfp.trk.is_flipped']
         elif algo == 'spine':
-            start = self.data.mu.start_point
-            true_start = self.data.mu.tpart.start_point
-            true_end = self.data.mu.tpart.end_point
+            start = _get_vector(f'mu{suffix}.start_point')
+            true_start = _get_vector(f'mu{suffix}.tpart.start_point')
+            true_end = _get_vector(f'mu{suffix}.tpart.end_point')
             keys = [f'mu.is_flipped']
         else:
             raise ValueError(f'Invalid algo: {algo}')
         #Find distance between start and true start
-        diff_s2s = np.linalg.norm(start.values-true_start.values,axis=1)
-        diff_s2e = np.linalg.norm(start.values-true_end.values,axis=1)
+        diff_s2s = np.linalg.norm(start-true_start,axis=1)
+        diff_s2e = np.linalg.norm(start-true_end,axis=1)
 
         #Set keys, values, and conditions
         self.add_cols(keys,[np.array(diff_s2s > diff_s2e).astype(np.float64)])
@@ -102,7 +107,7 @@ class ParticleGroup(CAF):
         self.add_cols(univ_keys, all_poisson_weights)
 
     #-------------------- setters --------------------#
-    def set_mcnu_containment(self,mcnu,algo):
+    def set_mcnu_containment(self,mcnu,algo,suffix=""):
         """
         Since mcnu has not idea about particle propagation in g4, we
         need to set it from the slice
@@ -125,9 +130,11 @@ class ParticleGroup(CAF):
         masked_data = self.data.loc[mask]
         truth_ind_series = masked_data[truth_ind_key]
         if algo == 'pandora':
-            contained_series = masked_data.mu.pfp.trk.truth.p.contained
+            contained_col = self.get_key(f'mu{suffix}.pfp.trk.truth.p.contained')[0]
+            contained_series = masked_data.loc[:, contained_col]
         elif algo == 'spine':
-            contained_series = masked_data.mu.tpart.is_contained
+            contained_col = self.get_key(f'mu{suffix}.tpart.is_contained')[0]
+            contained_series = masked_data.loc[:, contained_col]
         index_vals = masked_data.index
         
         # Create minimal dataframe with just what we need
@@ -149,7 +156,7 @@ class ParticleGroup(CAF):
         pgrp_df = pgrp_df.loc[~pgrp_df.index.duplicated(keep='first')]
 
         #Add to mcnu
-        keys = [f'mu.is_{algo}_contained']
+        keys = [f'mu{suffix}.is_{algo}_contained']
         mcnu.add_key(keys,fill=False) #Fill to false by default
         cols = pandas_helpers.getcolumns(keys,depth=mcnu.key_length())
         is_contained = (pgrp_df['contained'] == 1) | (pgrp_df['contained'] == True)
@@ -303,7 +310,7 @@ class ParticleGroup(CAF):
         if normalize:
             df = df.div(df.sum(axis=1), axis=0)
         return df
-    def get_covariance(self,univ_key,var_key,bins,stat=False,scale=1.,scale_cov=1.,verbose=False,rot90=False):
+    def get_covariance(self,univ_key,var_key,bins,stat=False,scale=1.,scale_cov=1.,verbose=False,rot90=False,ret_all=False):
         """
         Get covariance matrix for a given variable
         
@@ -325,7 +332,8 @@ class ParticleGroup(CAF):
             If True, rotate the covariance matrix by 90 degrees
         scale_cov : float
             Scale factor for the covariance matrix
-            
+        ret_all : bool
+            If True, return the unscaled covariance matrix, the correlation matrix, and the fractional covariance matrix
         Returns
         -------
         covariance_matrix : ndarray
@@ -341,6 +349,8 @@ class ParticleGroup(CAF):
         bin_indices = np.digitize(data, bins) - 1
         valid_indices = (bin_indices >= 0) & (bin_indices < len(bins) - 1)
         bin_indices = bin_indices[valid_indices]
+        if np.sum(valid_indices) != len(data):
+            print(f"Warning: {np.sum(valid_indices)} out of {len(data)} data points are valid")
 
         # Central value histogram (unweighted)
         n_bins = len(bins) - 1
@@ -348,9 +358,19 @@ class ParticleGroup(CAF):
         np.add.at(cv_histogram, bin_indices, self.data.genweight.values[valid_indices]) #Scale by genweight
         
         if stat:
-            covariance_matrix = np.diag(cv_histogram) * scale_cov ** 2
-            return np.rot90(covariance_matrix) if rot90 else covariance_matrix #Return early
-
+            unscaled_covariance_matrix = np.diag(cv_histogram)
+            covariance_matrix = unscaled_covariance_matrix * scale_cov ** 2
+            if not ret_all:
+                return np.rot90(covariance_matrix) if rot90 else covariance_matrix #Return early
+            sd = np.sqrt(np.diag(1/unscaled_covariance_matrix))
+            correlation_matrix = sd @ unscaled_covariance_matrix @ sd.T
+            fractional_covariance_matrix = unscaled_covariance_matrix / (np.diag(unscaled_covariance_matrix)[:, np.newaxis] * np.diag(unscaled_covariance_matrix)[np.newaxis, :])
+            if rot90:
+                covariance_matrix = np.rot90(covariance_matrix)
+                unscaled_covariance_matrix = np.rot90(unscaled_covariance_matrix)
+                correlation_matrix = np.rot90(correlation_matrix)
+                fractional_covariance_matrix = np.rot90(fractional_covariance_matrix)
+            return covariance_matrix, unscaled_covariance_matrix, correlation_matrix, fractional_covariance_matrix
         
         # Get all universe weight columns that match the pattern
         univ_cols = []
