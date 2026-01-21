@@ -207,6 +207,7 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True,n
       bins = sorted(bins) #sort bins in ascending order
 
     # Use pd.cut to assign bin labels
+    #print(df_comp[key].shape,bins.shape)
     df[assign_key] = pd.cut(df_comp[key], bins, labels=range(len(bins)-1), right=False)
     # Replace NaN values with -1
     df[assign_key] = df[assign_key].cat.add_categories([-1]).fillna(replace_nan)

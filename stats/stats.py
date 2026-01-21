@@ -1,4 +1,5 @@
 import numpy as np
+from scipy.stats import chi2
 
 def construct_covariance(cv_evts,var_evts,scale_cov=1.,assert_cov=True):
   """
@@ -60,6 +61,7 @@ def construct_covariance(cv_evts,var_evts,scale_cov=1.,assert_cov=True):
   correlation, stds = construct_correlation_matrix(covariance_matrix)
 
   fractional_uncertainty = stds / cv
+  biases = np.mean(diff, axis=0) / cv
 
   return covariance_matrix, fractional_cov, correlation, fractional_uncertainty
 
@@ -131,6 +133,82 @@ def build_matrix(pred_labels, true_labels, n_classes = 5):
         hist[int(p),int(t)] += 1
     return hist
 
+def get_smear_matrix(true_var, reco_var, bins, weights=None):
+    """
+    Compute smearing matrix from true vs reco 2D histogram.
+    
+    Parameters
+    ----------
+    true_var : array-like
+        True variable values
+    reco_var : array-like
+        Reconstructed variable values
+    bins : array-like
+        Bin edges
+    weights : array-like, optional
+        Weights for histogram
+        
+    Returns
+    -------
+    reco_vs_true : ndarray
+        Smearing matrix (reco_vs_true.T is the response matrix shape)
+    """
+    if weights is not None:
+        reco_vs_true, _, _ = np.histogram2d(true_var, reco_var, bins=bins, weights=weights)
+    else:
+        reco_vs_true, _, _ = np.histogram2d(true_var, reco_var, bins=bins)
+    return reco_vs_true
+
+
+def compute_efficiency(sig_truth, sel_truth):
+    """
+    Compute efficiency from truth histograms.
+    
+    Parameters
+    ----------
+    sig_truth : array-like
+        Signal truth histogram
+    sel_truth : array-like
+        Selected truth histogram
+        
+    Returns
+    -------
+    eff_truth : ndarray
+        Efficiency histogram
+    """
+    # Efficiency = selected_truth / signal_truth
+    eff_truth = sel_truth / sig_truth
+    # Handle division by zero
+    eff_truth = np.where(sig_truth > 0, eff_truth, 0.0)
+    return eff_truth
+
+
+def compute_sigma_tilde(response, sel_truth, sel_background_reco, xsec_unit):
+    """
+    Compute sigma_tilde from response matrix.
+    
+    Parameters
+    ----------
+    response : ndarray
+        Response matrix
+    sel_truth : array-like
+        Selected truth histogram
+    sel_background_reco : array-like
+        Selected background reco histogram
+    xsec_unit : float
+        Cross section unit conversion factor
+        
+    Returns
+    -------
+    sigma_tilde : ndarray
+        Sigma tilde histogram
+    """
+    sigma_tilde = xsec_unit * (
+        response @ sel_truth + sel_background_reco
+    )
+    return sigma_tilde
+
+
 def convert_smearing_to_response(smearing,eff):
   """
   Convert a smearing matrix to a response matrix by convolving 
@@ -172,13 +250,23 @@ def calc_chi2(pred, true, cov):
     dof : int
         Degrees of freedom
     """
-    diff = pred - true
+    assert len(pred) == len(true), f'Pred and true must have the same length: {len(pred)} != {len(true)}'
+    diff = true - pred
     dof = len(pred) - 1
     if cov.ndim == 1:
         # Diagonal covariance (just variances)
-        return np.sum(diff**2 / cov), dof
+        assert len(cov) == len(pred), f'Cov must have the same length as pred: {len(cov)} != {len(pred)}'
+        pval = chi2.sf(np.sum(diff**2 / cov), dof)
+        return np.sum(diff**2 / cov), dof, pval
     else:
         # Full covariance matrix
+        assert cov.shape[0] == cov.shape[1], f'Cov must be a square matrix: {cov.shape}'
+        assert cov.shape[0] == len(pred), f'Cov must have the same number of rows as pred: {cov.shape[0]} != {len(pred)}'
         inv_cov = np.linalg.inv(cov)
-        chi2 = diff @ inv_cov @ diff
-        return chi2, dof
+        # print(f'diff: {diff}')
+        # print(f'diff.T: {diff.T}')
+        # print(f'inv_cov: {inv_cov}')
+        # print(f'diff.T @ inv_cov: {diff.T @ inv_cov}')
+        chi2_val = diff.T @ inv_cov @ diff
+        pval = chi2.sf(chi2_val, dof)
+        return chi2_val, dof, pval

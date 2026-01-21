@@ -6,7 +6,7 @@ from sbnd.cafclasses.object_calc import *
 from sbnd.detector.volume import *
 from sbnd.constants import *
 from .particle import Particle
-
+from sbnd.general.utils import read_hdf_xrootd
 
 class PFP(Particle):
   #-------------------- constructor/rep --------------------#
@@ -35,12 +35,12 @@ class PFP(Particle):
     if isinstance(key,list):
       for i,k in enumerate(key):
         if i == 0:
-          thispfp = PFP(pd.read_hdf(fname,key=k,**kwargs))
+          thispfp = PFP(read_hdf_xrootd(fname,key=k,**kwargs))
         else:
-          thispfp.combine(PFP(pd.read_hdf(fname,key=k,**kwargs)))
+          thispfp.combine(PFP(read_hdf_xrootd(fname,key=k,**kwargs)))
       return thispfp
     elif isinstance(key,str):
-      thispfp = PFP(pd.read_hdf(fname,key=key,**kwargs))
+      thispfp = PFP(read_hdf_xrootd(fname,key=key,**kwargs))
     else:
       raise ValueError(f'Invalid key: {key}')
   #-------------------- helpers --------------------#

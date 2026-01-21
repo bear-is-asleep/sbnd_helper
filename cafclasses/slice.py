@@ -3,6 +3,7 @@ from pyanalib import pandas_helpers
 from .particlegroup import ParticleGroup
 from sbnd.detector.volume import *
 from sbnd.constants import *
+from sbnd.general.utils import read_hdf_xrootd
 
 
 class CAFSlice(ParticleGroup):
@@ -29,11 +30,11 @@ class CAFSlice(ParticleGroup):
           raise ValueError(f'No keys provided for {fname}')
         for i,k in enumerate(key):
           if i == 0:
-            thisslc = CAFSlice(pd.read_hdf(fname,key=k),**kwargs)
+            thisslc = CAFSlice(read_hdf_xrootd(fname,key=k),**kwargs)
           else:
-            thisslc.combine(CAFSlice(pd.read_hdf(fname,key=k),**kwargs))
+            thisslc.combine(CAFSlice(read_hdf_xrootd(fname,key=k),**kwargs))
       elif isinstance(key,str):
-        thisslc = CAFSlice(pd.read_hdf(fname,key=key),**kwargs)
+        thisslc = CAFSlice(read_hdf_xrootd(fname,key=key),**kwargs)
       else:
         raise ValueError(f'Invalid key: {key}')
       if filter_univ:
@@ -173,6 +174,73 @@ class CAFSlice(ParticleGroup):
         self.data = self.data[condition]
         return
       self.apply_cut('cut.all', condition, cut)
+    def cut_muon_by_offset(self, offset, calo_var, has_offset_uses_has_muon=True):
+      """
+      Apply different cuts based on whether the index has an offset applied.
+      
+      For rows without offset (index < offset), applies cut using calo variation column.
+      For rows with offset (index >= offset), applies cut using has_muon column.
+      
+      Parameters
+      ----------
+      offset : int
+        The offset value used in combine() (e.g., int(1e5))
+      calo_var : str
+        The calo variation suffix (e.g., 'alpha_emb00')
+      has_offset_uses_has_muon : bool
+        If True, offset rows use has_muon column. If False, use calo column (default: True)
+        
+      Returns
+      -------
+      self : CAFSlice
+        Returns self for method chaining
+      """
+      # Get the index values to check for offset
+      if isinstance(self.data.index, pd.MultiIndex):
+        # For MultiIndex, check the last level (where offset is applied)
+        index_values = self.data.index.get_level_values(-1).values
+      else:
+        # For regular Index, use the index directly
+        index_values = self.data.index.values
+      
+      # Create masks for rows with and without offset
+      offset_mask = index_values >= offset
+      non_offset_mask = ~offset_mask
+      
+      # Get column references
+      calo_cut_key = f'mu_{calo_var}.pfp.trk.is_muon_{calo_var}'
+      calo_cut_col = self.get_key(calo_cut_key)[0]
+      has_muon_col = self.get_key('has_muon')[0]
+      
+      # Apply cuts to each subset
+      orig_size = len(self.data)
+      
+      # Non-offset rows: use calo variation cut
+      if non_offset_mask.sum() > 0:
+        non_offset_data = self.data.loc[non_offset_mask]
+        non_offset_filtered = non_offset_data[non_offset_data[calo_cut_col] == True]
+        
+        # Offset rows: use has_muon or calo cut based on parameter
+        if offset_mask.sum() > 0:
+          offset_data = self.data.loc[offset_mask]
+          if has_offset_uses_has_muon:
+            offset_filtered = offset_data[offset_data[has_muon_col] == True]
+          else:
+            offset_filtered = offset_data[offset_data[calo_cut_col] == True]
+          # Combine both subsets
+          self.data = pd.concat([non_offset_filtered, offset_filtered], axis=0)
+        else:
+          self.data = non_offset_filtered
+      else:
+        # All rows have offset
+        if has_offset_uses_has_muon:
+          self.data = self.data.loc[offset_mask & (self.data[has_muon_col] == True)]
+        else:
+          self.data = self.data.loc[offset_mask & (self.data[calo_cut_col] == True)]
+      
+      new_size = len(self.data)
+      print(f'Applied offset-based cuts ({orig_size:,} --> {new_size:,})')
+      return self
     #-------------------- adders --------------------#
     def add_track_flipping(self,suffix=""):
       """
@@ -284,6 +352,24 @@ class CAFSlice(ParticleGroup):
       Get pur eff f1
       """
       return super().get_pur_eff_f1('pandora',mcnu,cuts,categories)
+    def get_calo_variations(self,keys,suffixes=["_alpha_embm1", "_beta_90m1", "_R_embm1","_alpha_embp1", "_beta_90p1", "_R_embp1",""]):
+      """
+      Get list of calo variations for each key.
+
+      Parameters
+      ----------
+      keys : list (N keys)
+        List of keys to get calo variations for.
+      suffixes : list (M suffixes)
+        List of suffixes to add to the keys.
+
+      Returns
+      ----------
+      list (N keys , M suffixes)
+        List of keys with the suffixes added.
+      """
+      #Get columns for each key
+      cols = self.get_key(keys) #N
     #-------------------- plotters --------------------#
       
        

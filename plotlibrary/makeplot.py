@@ -12,8 +12,8 @@ day = plotters.day
 from sbnd.plotlibrary import makeplot
 from sbnd.general import plotters
 from sbnd.general import utils
-def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
-                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,**kwargs):
+def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ax=None,fig=None,**kwargs):
     """
     Create a histogram from a list of series each corresponding
     to a different true event type. Data series is optional.
@@ -28,6 +28,8 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
         If True, the histogram is normalized to a density.
     yerr : list of float, optional
         yerr on MC event count. Will be a hatched bar centered on the MC event count.
+    frac_yerr : bool, optional
+        If True, the yerr is a fraction of the MC event count, and needs to be multiplied by the MC event count to get the actual error.
     data_series : pd.Series, optional
         Series which contains data.
     scale_data : bool, optional
@@ -95,7 +97,7 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
       _max = np.max(_maxs)
       bins = np.linspace(_min,_max,bins+1)
     fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,colors=colors,weights=weights,return_counts=True
-                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,show_counts=show_counts,show_pcts=show_pcts,**kwargs)
+                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,show_counts=show_counts,show_pcts=show_pcts,ax=ax,fig=fig,filter_nan=True,**kwargs)
     if data_series is not None:
         #Group data by binning, get mean and std of data series
         if bin_centers is None:
@@ -118,22 +120,26 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
         ax.errorbar(bin_centers,data_counts,yerr=data_stds,fmt='o',color='black',label=data_events_label)
     if yerr is not None:
         yerr_arr = np.asarray(yerr) 
+        if frac_yerr:
+          yerr_arr = yerr_arr * n_perbin
         if len(yerr_arr) != len(bins) - 1:
             raise ValueError('yerr must have the same length as the histogram bins')
         #ax.errorbar(bin_centers,n_perbin,yerr=yerr_arr,fmt='o',color='black')
-        ax.bar(
-            (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
-            2 * yerr_arr,
-            bottom=n_perbin - yerr_arr,
-            align='center',
-            width=np.diff(bins),
-            facecolor='none',
-            edgecolor='gray',
-            alpha=1.,
-            linewidth=0.,
-            hatch='xxx',
-            label=yerr_label
-        )
+    else:
+      yerr_arr = np.sqrt(n_perbin)
+    ax.bar(
+        (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
+        2 * yerr_arr,
+        bottom=n_perbin - yerr_arr,
+        align='center',
+        width=np.diff(bins),
+        facecolor='none',
+        edgecolor='gray',
+        alpha=1.,
+        linewidth=0.,
+        hatch='xxx',
+        label=yerr_label
+    )
 
     if dens: ax.set_ylabel('Density')
     else: ax.set_ylabel('Candidates')
@@ -150,8 +156,8 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
     plotters.add_label(ax,cut_desc,where='bottomrightoutside',color='black',fontsize=12)
     #plotters.set_style(ax)
     if legend:
-      ax.legend(fontsize=10)
-    if savename != '':
+      ax.legend(fontsize=8,loc='upper left',bbox_to_anchor=(1.05,1))
+    if savename != '' and fig is not None:
         if plot_dir is None:
           raise ValueError('plot_dir is None')
         plotters.save_plot(f'{savename}',fig=fig,folder_name=plot_dir)
@@ -165,12 +171,169 @@ def create_hist(series,labels,dens=False,yerr=None,yerr_label='Total',data_serie
       return fig,ax
     return fig,ax
 
+def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=None,cut='',savename=''
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ylim=None,**kwargs):
+  """
+  Create a histogram from a list of series each corresponding
+  to a different true event type using `create_hist`. We add another ax below the main ax that shows the data/MC ratio.
+  
+  Parameters
+  ----------
+  Same as create_hist, but data_series is required.
+  
+  Returns
+  -------
+  fig : matplotlib.figure.Figure
+      Figure of the histogram.
+  ax : matplotlib.axes.Axes
+      Top axes of the histogram (main plot).
+  ax2 : matplotlib.axes.Axes
+      Bottom axes showing the ratio plot.
+  n_perbin : np.ndarray, optional
+      Counts per bin (only if return_counts=True).
+  """
+  if data_series is None:
+    raise ValueError('data_series is required for create_hist_dataratio')
+  
+  if len(series) == 0:
+    print(f'No events in series'+'\n'+f'xlabel: {xlabel}'+'\n'+f'cut: {cut}'+'\n'+f'savename: {savename}')
+    return None,None,None,None if return_counts else None,None,None
+  
+  # Create two-panel figure
+  fig,(ax,ax2) = plt.subplots(2,1,figsize=(7,5),sharex=True,gridspec_kw={'height_ratios': [4, 1]})
+  
+  # Prepare bins
+  if isinstance(bins,int):
+    _mins = [np.min(s) for s in series]
+    _maxs = [np.max(s) for s in series]
+    _min = np.min(_mins)
+    _max = np.max(_maxs)
+    bins = np.linspace(_min,_max,bins+1)
+  
+  if bin_centers is None:
+    bin_centers = (bins[:-1] + bins[1:]) / 2
+  
+  # Call create_hist to populate top panel
+  fig,ax,n_perbin = create_hist(series,labels,dens=dens,yerr=yerr,frac_yerr=frac_yerr,yerr_label=yerr_label,data_series=data_series,
+                                 scale_data=scale_data,cut_desc='',xlabel='',label=label,colors=colors,weights=weights,
+                                 bins=bins,cut=cut,savename='',plot_dir=None,stat_label='',data_events=data_events,
+                                 dens_norm=dens_norm,return_counts=True,pot_label=pot_label,close=False,legend=legend,
+                                 show_counts=show_counts,show_pcts=show_pcts,bin_centers=bin_centers,ax=ax,fig=fig,**kwargs)
+  
+  # Get data counts (same logic as in create_hist)
+  data_counts = np.array(data_series.groupby(pd.cut(data_series,bins=bins)).count().values,dtype=np.float32)
+  data_stds = np.sqrt(data_counts)
+  if dens:
+    data_counts = data_counts * (dens_norm/len(data_series))
+    data_stds = data_stds * (dens_norm/len(data_series))
+  if not dens and scale_data:
+    # Get total MC counts (sum of all series counts, matching create_hist logic)
+    if weights is None:
+      total_mc = sum([len(s) for s in series])
+    else:
+      total_mc = sum([round(np.sum(w)) for w in weights])
+    data_counts = data_counts * (total_mc/len(data_series))
+    data_stds = data_stds * (total_mc/len(data_series))
+  data_err = 1/data_stds
+  # Calculate ratio
+  mc_counts = np.asarray(n_perbin)
+  ratio = data_counts / mc_counts
+
+  
+  # Calculate ratio errors: use the fractional error on MC (same as shown in main plot)
+  if yerr is not None:
+    yerr_arr = np.asarray(yerr)
+    if len(yerr_arr) != len(bins) - 1:
+      raise ValueError('yerr must have the same length as the histogram bins')
+    # If frac_yerr=True, yerr is already fractional. If False, convert to fractional.
+    if frac_yerr:
+      ratio_err = yerr_arr  # Already fractional error
+    else:
+      ratio_err = yerr_arr / mc_counts  # Convert to fractional
+  else:
+    # Poisson error: fractional error is sqrt(MC counts) / MC counts
+    ratio_err = np.sqrt(mc_counts) / mc_counts
+  #Combine errors in quadrature
+  y_err = ratio_err.copy()
+  ratio_err = np.sqrt(ratio_err**2 + data_err**2)
+
+  # print(f'mc_counts: {mc_counts}')
+  # print(f'y_err: {y_err}')
+  # print(f'data_counts: {data_counts}')
+  # print(f'data_err: {data_err}')
+  # print(f'ratio: {ratio}')
+  # print(f'ratio_err: {ratio_err}')
+  # Plot ratio on bottom axis
+  ax2.errorbar(bin_centers, ratio, yerr=data_err, fmt='o', color='black', markersize=4)
+  ax2.axhline(1, ls='--', color='black', linewidth=1)
+  ax2.bar(
+            (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
+            2 * ratio_err,
+            bottom=1-ratio_err,
+            align='center',
+            width=np.diff(bins),
+            facecolor='none',
+            edgecolor='gray',
+            alpha=1.,
+            linewidth=0.,
+            hatch='xxxx',
+            label=yerr_label
+        )
+  ax2.set_ylabel('Data/MC')
+  ax2.set_xlabel(xlabel)
+  ax2.grid(True, alpha=0.3)
+  #ax2.set_ylim(0,2)
+  if ylim is not None:
+    assert len(ylim) == 2, 'ylim must be a tuple of (min,max)'
+    ax2.set_ylim(ylim[0],ylim[1])
+  # Re-add labels to top axis (create_hist may have cleared xlabel)
+  if not dens:
+    ax.set_ylabel('Candidates')
+  else:
+    ax.set_ylabel('Density')
+  
+  # Hide x-axis labels on top axis (only show on bottom)
+  ax.tick_params(labelbottom=False)
+  
+  # Re-add cut_desc and stat_label to top axis
+  plotters.add_label(ax,stat_label,where='bottomrightoutside',fontsize=10)
+  plotters.add_label(ax,cut_desc,where='bottomrightoutside',color='black',fontsize=12)
+  
+  # Handle saving
+  if savename != '':
+    if plot_dir is None:
+      raise ValueError('plot_dir is None')
+    plotters.save_plot(f'{savename}',fig=fig,folder_name=plot_dir)
+    if close:
+      plt.close('all')
+  
+  if return_counts:
+    return fig,ax,ax2,n_perbin
+  else:
+    return fig,ax,ax2
+  
+
 def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,return_counts=False,
-              show_counts=True,show_pcts=True,**pltkwargs):
+              show_counts=True,show_pcts=True,ax=None,fig=None,filter_nan=True,filter_outofrange=True,bins=None,**pltkwargs):
   """
   series is a list of pd.Series
   """
-  fig,ax = plt.subplots(figsize=(7,4))
+  if fig is None and ax is None:
+    fig,ax = plt.subplots(figsize=(7,4))
+  elif fig is None:
+    fig = plt.gcf()
+  elif ax is None:
+    ax = fig.gca()
+  if filter_nan:
+    masks = [~np.isnan(s.values) for s in series]
+    series = [s[masks[i]] for i,s in enumerate(series)]
+    if weights is not None:
+      weights = [weights[i][masks[i]] for i in range(len(weights))]
+  if filter_outofrange and bins is not None:
+    masks = [s.between(bins[0], bins[-1]) for s in series]
+    series = [s[masks[i]] for i,s in enumerate(series)]
+    if weights is not None:
+      weights = [weights[i][masks[i]] for i in range(len(weights))]
   if weights is None:
     counts = [len(s) for s in series]
   else:
@@ -190,7 +353,7 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
     colors = [tuple(color) for color in colors]
   #edgecolors = [plotters.darken_color(c,factor=0.5) for c in colors]
   #for s, c, e, w, l in zip(series, colors, edgecolors, weights, legend_labels):
-  n, bins, patches = ax.hist(series, label=legend_labels, color=colors, weights=weights, **pltkwargs)
+  n, bins, patches = ax.hist(series, label=legend_labels, color=colors, weights=weights, bins=bins, **pltkwargs)
   n = [_n[-1] for _n in n.T] # Convert to list of last elements of each bin, which is the total number of events in each bin
   ax.set_xlabel(xlabel)
   if title is not None:

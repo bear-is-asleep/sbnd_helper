@@ -9,6 +9,42 @@ import os
 import numba as nb
 from itertools import chain
 import pandas as pd
+from contextlib import contextmanager
+import tempfile
+import subprocess
+import h5py
+from .h5filemanager import H5FileManager
+
+def get_nperbin(series,bins,weights=None):
+  """
+  Count the number of events in each bin given a list of series and weights.
+  """
+  assert len(series) == len(weights), f'Length of series and weights must be the same, {len(series)} != {len(weights)}'
+  nperbin = []
+  for i,s in enumerate(series):
+    nperbin.append(np.histogram(s,bins=bins,weights=weights[i])[0])
+  return nperbin
+
+def h5py_file_xrootd(path, mode='r', **kwargs):
+    """Wrapper for h5py.File that handles XRootD URLs - NO COPYING!"""
+    return H5FileManager(path, mode=mode, **kwargs)
+
+def read_hdf_xrootd(path, key=None, **kwargs):
+    """Wrapper for pd.read_hdf that handles XRootD URLs."""
+    with xrootd_file(path) as local_path:
+        if key is not None:
+            return pd.read_hdf(local_path, key=key, **kwargs)
+        else:
+            return pd.read_hdf(local_path, **kwargs)
+
+@contextmanager
+def xrootd_file(xrootd_path, cleanup=True, verbose=False):
+    """
+    Context manager to handle XRootD URLs for pandas read_hdf.
+    """
+    from .h5filemanager import xrootd_file as _xrootd_file
+    with _xrootd_file(xrootd_path, cleanup=cleanup, verbose=verbose) as path:
+        yield path
 
 def get_sys_keys(pattern,keys):
   sys_keys = []
@@ -17,6 +53,11 @@ def get_sys_keys(pattern,keys):
       if pattern in t:
         sys_keys.append(k)
   return sys_keys
+
+def convert_pnfs_to_xroot(path):
+    if path.startswith("/pnfs"):
+        return path.replace("/pnfs", "root://fndcadoor.fnal.gov:1094/pnfs/fnal.gov/usr")
+    return path
 
 def get_weights_from_sys_keys(sys_keys,data):
   """

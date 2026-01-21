@@ -384,6 +384,7 @@ class CAF:
       # Update the current df with the new DataFrame
       new_cols = updated_df.columns.difference(self.data.columns)
       cols_to_add = {col: updated_df[col] for col in new_cols}
+      #print(cols_to_add.values())
       self.data = pd.concat([self.data, pd.DataFrame(cols_to_add)], axis=1)
     def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True):
       """
@@ -405,10 +406,10 @@ class CAF:
 
       # Allow us to be lazy, the values should be in a list
       if not isinstance(values, list):
-        print('WARNING: Implicitly converting values to list')
+        #print('WARNING: Implicitly converting values to list')
         values = [values]
       if not isinstance(keys, list):
-        print('WARNING: Implicitly converting keys to list')
+        #print('WARNING: Implicitly converting keys to list')
         keys = [keys]
 
       if len(keys) != len(values):
@@ -493,7 +494,7 @@ class CAF:
       Run all post processing
       """
       pass
-    def scale_to_pot(self,nom_pot,sample_pot=None):
+    def scale_to_pot(self,nom_pot,sample_pot=None,overwrite=False):
       """
       Scale to nominal protons on target (POT). Need sample POT as input
       """
@@ -505,9 +506,12 @@ class CAF:
         self.add_key(keys)
         cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
+      elif not overwrite:
+        if not np.all(self.data.genweight == 1.):
+          raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
       print(f'--scaling to POT ({nom_pot/sample_pot:.2e}): {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
-    def scale_to_livetime(self,nom_livetime,sample_livetime=None):
+    def scale_to_livetime(self,nom_livetime,sample_livetime=None,overwrite=False):
       """
       Scale to nominal livetime. Need sample livetime as input
       """
@@ -518,6 +522,9 @@ class CAF:
         self.add_key(keys)
         cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
+      elif not overwrite:
+        if not np.all(self.data.genweight == 1.):
+          raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
       print(f'--scaling to livetime ({nom_livetime/sample_livetime:.2e}): {sample_livetime:.2e} --> {nom_livetime:.2e}')
       self.data.genweight = self.data.genweight*nom_livetime/sample_livetime
       self.livetime = nom_livetime
@@ -581,6 +588,84 @@ class CAF:
         Remove all rows with nan in specified columns
         """
         self.data = self.data.dropna(subset=cols,how='all')
+    def flatten_columns(self):
+        """
+        Force all columns to be Series with shape (N,) instead of DataFrames with shape (N,1).
+        This fixes issues where MultiIndex column access returns DataFrames instead of Series.
+        
+        Returns
+        -------
+        self : CAF
+            Returns self for method chaining
+        """
+        # Use iloc to access by position to avoid MultiIndex recursion
+        new_data = {}
+        for i, col in enumerate(self.data.columns):
+            try:
+                col_data = self.data.iloc[:, i]
+                # Ensure it's a 1D Series
+                if isinstance(col_data, pd.DataFrame):
+                    col_data = col_data.squeeze()
+                if hasattr(col_data, 'values'):
+                    values = col_data.values
+                    if len(values.shape) > 1:
+                        values = values.flatten()
+                    new_data[col] = values
+                else:
+                    new_data[col] = col_data
+            except (KeyError, IndexError, TypeError):
+                continue
+        
+        # Reconstruct dataframe with flattened columns
+        if new_data:
+            # Preserve MultiIndex structure if it exists
+            if isinstance(self.data.columns, pd.MultiIndex):
+                self.data = pd.DataFrame(new_data, index=self.data.index)
+                self.data.columns = pd.MultiIndex.from_tuples(list(new_data.keys()), names=self.data.columns.names)
+            else:
+                self.data = pd.DataFrame(new_data, index=self.data.index)
+        
+        return self
+    def remove_column_suffix(self, suffix):
+        """
+        Remove a suffix from all levels of MultiIndex columns that end with it.
+        
+        Parameters
+        ----------
+        suffix : str
+            The suffix to remove from column names (e.g., '_alpha_emb00')
+            
+        Returns
+        -------
+        self : CAF
+            Returns self for method chaining
+        """
+        if not isinstance(self.data.columns, pd.MultiIndex):
+            # For regular Index, just rename columns that end with suffix
+            new_columns = [col.replace(suffix, '') if str(col).endswith(suffix) else col 
+                          for col in self.data.columns]
+            self.data.columns = new_columns
+            return self
+        
+        # For MultiIndex, check each level of each column tuple
+        new_columns = []
+        for col in self.data.columns:
+            new_col = tuple(
+                level.replace(suffix, '') if isinstance(level, str) and level.endswith(suffix) else level
+                for level in col
+            )
+            new_columns.append(new_col)
+        
+        # Directly assign the new columns
+        self.data.columns = pd.MultiIndex.from_tuples(new_columns, names=self.data.columns.names)
+        
+        # Sort columns lexicographically to avoid PerformanceWarning about lexsort depth
+        self.data.sort_index(axis=1, inplace=True)
+
+        # For some reason, the columns are not flattened, so we need to do it manually
+        self.flatten_columns()
+        
+        return self
     #-------------------- checkers --------------------#
     def check_key(self,key):
       """
