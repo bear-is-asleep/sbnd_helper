@@ -10,10 +10,11 @@ import pandas as pd
 day = plotters.day
 
 from sbnd.plotlibrary import makeplot
+from sbnd.stats import stats
 from sbnd.general import plotters
 from sbnd.general import utils
 def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
-                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ax=None,fig=None,**kwargs):
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ax=None,fig=None,cov=None,**kwargs):
     """
     Create a histogram from a list of series each corresponding
     to a different true event type. Data series is optional.
@@ -52,8 +53,6 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         Name of the file to save the histogram.
     stat_label : str, optional
         Label of the statistic.
-    data_events : int, optional
-        Number of data events.
     dens_norm : float, optional
         Normalization factor for the density.
     return_counts : bool, optional
@@ -68,6 +67,8 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         If True, show the percentages in the legend.
     bin_centers : list of float, optional
         List of bin centers. If None, the bin centers are calculated from the bins.
+    cov : np.ndarray, optional
+        Covariance matrix. If None, chi2 uses yerr.
     **kwargs : dict
         Additional keyword arguments.
     
@@ -98,6 +99,15 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
       bins = np.linspace(_min,_max,bins+1)
     fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,colors=colors,weights=weights,return_counts=True
                    ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,show_counts=show_counts,show_pcts=show_pcts,ax=ax,fig=fig,filter_nan=True,**kwargs)
+    if yerr is not None:
+        yerr_arr = np.asarray(yerr) 
+        if frac_yerr:
+          yerr_arr = yerr_arr * n_perbin
+        if len(yerr_arr) != len(bins) - 1:
+            raise ValueError('yerr must have the same length as the histogram bins')
+        #ax.errorbar(bin_centers,n_perbin,yerr=yerr_arr,fmt='o',color='black')
+    else:
+      yerr_arr = np.sqrt(n_perbin)
     if data_series is not None:
         #Group data by binning, get mean and std of data series
         if bin_centers is None:
@@ -111,22 +121,27 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
             data_counts = data_counts * (np.sum(counts)/len(data_series))
             data_stds = data_stds * (np.sum(counts)/len(data_series))
         if show_counts:
-          if data_events is not None:
-              data_events_label = f'Data ({utils.format_number_with_suffix(data_events)})'
-          else:
-              data_events_label = f'Data ({utils.format_number_with_suffix(data_counts.sum())})'
+          data_events_label = f'Data ({utils.format_number_with_suffix(data_counts.sum())})'
+          if cov is not None or yerr is not None:
+            #print(f'pred: {n_perbin}')
+            #print(f'true: {data_counts.values}')
+            #print(f'cov: {cov}')
+            # if cov is not None:
+            #   #print(f'diagonal cov: {np.diag(np.sqrt(cov))}')
+            #   print(f'cov: {cov}')
+            # else:
+            #   print(f'unc (no cov): {yerr_arr}')
+            # Get chi2 and p-value
+            if cov is not None:
+              chi2, dof, pval = stats.calc_chi2(n_perbin, data_counts, cov,filter_min=1.)
+            elif yerr is not None:
+              chi2, dof, pval = stats.calc_chi2(n_perbin, data_counts, yerr_arr**2,filter_min=1.)
+            chi2_str = utils.get_chi2_dof_pval_str(chi2,dof,pval)
+            data_events_label += f'\n({chi2_str})'
         else:
           data_events_label = None
         ax.errorbar(bin_centers,data_counts,yerr=data_stds,fmt='o',color='black',label=data_events_label)
-    if yerr is not None:
-        yerr_arr = np.asarray(yerr) 
-        if frac_yerr:
-          yerr_arr = yerr_arr * n_perbin
-        if len(yerr_arr) != len(bins) - 1:
-            raise ValueError('yerr must have the same length as the histogram bins')
-        #ax.errorbar(bin_centers,n_perbin,yerr=yerr_arr,fmt='o',color='black')
-    else:
-      yerr_arr = np.sqrt(n_perbin)
+    #Hatches
     ax.bar(
         (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
         2 * yerr_arr,
@@ -140,6 +155,18 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         hatch='xxx',
         label=yerr_label
     )
+    #Fill
+    ax.bar(
+        (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
+        2 * yerr_arr,
+        bottom=n_perbin - yerr_arr,
+        align='center',
+        width=np.diff(bins),
+        facecolor='gray',
+        edgecolor='none',
+        alpha=0.2,
+        linewidth=0.,
+    )
 
     if dens: ax.set_ylabel('Density')
     else: ax.set_ylabel('Candidates')
@@ -148,12 +175,13 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
       label_y_shift = 0.06
     else:
       label_y_shift = 0
+    ax.set_ylim(0,y_lim[1])
     #Add labels
     plotters.add_label(ax,pot_label,where='toprightoutside',color='black',alpha=1.,fontsize=12)
     plotters.add_label(ax,label,where=(0.01,1.07+label_y_shift) if '\n' not in label else (0.01,1.15+label_y_shift)
       ,color='gray',alpha=0.9,fontsize=10,horizontalalignment='left',verticalalignment='top')
     plotters.add_label(ax,stat_label,where='bottomrightoutside',fontsize=10)
-    plotters.add_label(ax,cut_desc,where='bottomrightoutside',color='black',fontsize=12)
+    plotters.add_label(ax,cut_desc,where='bottomrightoutside',color='black',fontsize=6)
     #plotters.set_style(ax)
     if legend:
       ax.legend(fontsize=8,loc='upper left',bbox_to_anchor=(1.05,1))
@@ -172,7 +200,7 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
     return fig,ax
 
 def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=None,cut='',savename=''
-                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ylim=None,**kwargs):
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ylim=None,cov=None,show_cov=False,**kwargs):
   """
   Create a histogram from a list of series each corresponding
   to a different true event type using `create_hist`. We add another ax below the main ax that shows the data/MC ratio.
@@ -218,10 +246,12 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
                                  scale_data=scale_data,cut_desc='',xlabel='',label=label,colors=colors,weights=weights,
                                  bins=bins,cut=cut,savename='',plot_dir=None,stat_label='',data_events=data_events,
                                  dens_norm=dens_norm,return_counts=True,pot_label=pot_label,close=False,legend=legend,
-                                 show_counts=show_counts,show_pcts=show_pcts,bin_centers=bin_centers,ax=ax,fig=fig,**kwargs)
+                                 show_counts=show_counts,show_pcts=show_pcts,bin_centers=bin_centers,ax=ax,fig=fig,cov=cov,**kwargs)
   
+  #print(f'n_perbin: {n_perbin}')
   # Get data counts (same logic as in create_hist)
   data_counts = np.array(data_series.groupby(pd.cut(data_series,bins=bins)).count().values,dtype=np.float32)
+  #print(f'data_counts: {data_counts}')
   data_stds = np.sqrt(data_counts)
   if dens:
     data_counts = data_counts * (dens_norm/len(data_series))
@@ -257,15 +287,10 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
   y_err = ratio_err.copy()
   ratio_err = np.sqrt(ratio_err**2 + data_err**2)
 
-  # print(f'mc_counts: {mc_counts}')
-  # print(f'y_err: {y_err}')
-  # print(f'data_counts: {data_counts}')
-  # print(f'data_err: {data_err}')
-  # print(f'ratio: {ratio}')
-  # print(f'ratio_err: {ratio_err}')
   # Plot ratio on bottom axis
   ax2.errorbar(bin_centers, ratio, yerr=data_err, fmt='o', color='black', markersize=4)
   ax2.axhline(1, ls='--', color='black', linewidth=1)
+  #Hatches
   ax2.bar(
             (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
             2 * ratio_err,
@@ -278,6 +303,18 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
             linewidth=0.,
             hatch='xxxx',
             label=yerr_label
+        )
+  #Fill
+  ax2.bar(
+            (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
+            2 * ratio_err,
+            bottom=1-ratio_err,
+            align='center',
+            width=np.diff(bins),
+            facecolor='gray',
+            edgecolor='none',
+            alpha=0.2,
+            linewidth=0.,
         )
   ax2.set_ylabel('Data/MC')
   ax2.set_xlabel(xlabel)
@@ -314,7 +351,7 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
   
 
 def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,return_counts=False,
-              show_counts=True,show_pcts=True,ax=None,fig=None,filter_nan=True,filter_outofrange=True,bins=None,**pltkwargs):
+              show_counts=True,show_pcts=True,ax=None,fig=None,filter_nan=False,filter_outofrange=False,bins=None,**pltkwargs):
   """
   series is a list of pd.Series
   """
@@ -365,7 +402,7 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
   else:
     return fig, ax
 
-def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,label_boxes=False,
+def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Oranges',plot_line=False,label_boxes=False,
                 colorbar=False,ax=None,fig=None,text_color='wb',show_frac=False,**pltkwargs):
   """
   x,y are pd.Series
@@ -422,44 +459,133 @@ def plot_hist2d(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,
   plotters.set_style(ax)
   return fig,ax
 
-def plot_hist2d_frac_err(x,y,xlabel='',ylabel='',title=None,cmap='Blues',plot_line=False,label_boxes=False,
-                         colorbar=False,normalize=False,**pltkwargs):
-  """
-  x,y are pd.Series
-  assume x is the true var
-  """
-  fig,(ax,ax2) = plt.subplots(2,1,figsize=(6.5,7),tight_layout=True,sharex=not colorbar,gridspec_kw={'height_ratios': [6, 1]})
-  if 'bins' in pltkwargs:
-    bins = pltkwargs['bins']
-  else:
-    raise ValueError('bins must be provided')
-  bin_centers = (bins[1:] + bins[:-1])/2
-  bias = np.zeros(len(bins)-1)
-  err = np.zeros(len(bins)-1)
-  for i in range(len(bins)-1):
-    in_range = (x > bins[i]) & (x < bins[i+1])
-    _x = x[in_range]
-    _y = y[in_range]
-
-    if normalize:
-      statistic = (_y-_x)/_x
+def plot_hist2d_frac_err(x, y, xlabel='x', ylabel='y', title=None, cmap='Oranges', plot_line=False, label_boxes=False,
+                         colorbar=False, normalize=False, use_errorbar=False,fit_curve=True,show_fit=False,**pltkwargs):
+    """
+    x,y are pd.Series
+    assume x is the true var
+    """
+    if fit_curve:
+        def gaussian(x,a,b,c):
+            return a*np.exp(-(x-b)**2/(2*c**2))
+    if 'bins' in pltkwargs:
+        bins = pltkwargs['bins']
     else:
-      statistic = _y-_x
-    bias[i] = np.mean(statistic)
-    err[i] = np.std(statistic)
-  ax2.errorbar(bin_centers,bias,yerr=err,fmt='o',color='black')
-  ax2.axhline(0,ls='--',color='red')
-  ax2.set_xlabel(xlabel)
-  if normalize:
-    ax2.set_ylabel('Fractional\nError')
-  else:
-    ax2.set_ylabel(r'Bias')
-  #Ensure errorbar xrange matches hist2d
-  ax2.set_xlim([bins[0],bins[-1]])
-  fig,ax = plot_hist2d(x,y,xlabel='',ylabel=ylabel,title=title,cmap=cmap,plot_line=plot_line,label_boxes=label_boxes,colorbar=colorbar
-                    ,fig=fig,ax=ax,**pltkwargs)
-  plotters.set_style(ax2)
-  return fig,(ax,ax2)
+        raise ValueError('bins must be provided')
+    bin_centers = (bins[1:] + bins[:-1]) / 2
+    bias = np.zeros(len(bins) - 1)
+    err = np.zeros(len(bins) - 1)
+    median = np.zeros(len(bins) - 1)
+    for i in range(len(bins) - 1):
+        in_range = (x > bins[i]) & (x < bins[i + 1])
+        _x = x[in_range]
+        _y = y[in_range]
+        if normalize:
+            statistic = (_y - _x) / _x
+        else:
+            statistic = _y - _x
+        if fit_curve:
+            try:
+                _hist, _bin_edges = np.histogram(statistic,bins=np.arange(-2,2.2,0.2))
+                _bin_centers = (_bin_edges[:-1] + _bin_edges[1:]) / 2
+                popt, pcov = curve_fit(gaussian,_bin_centers,_hist)
+            except:
+                popt = [np.nan,np.nanmean(statistic),np.nanstd(statistic)]
+            bias[i] = popt[1]
+            err[i] = abs(popt[2])
+        else:
+            bias[i] = np.nanmean(statistic)
+            err[i] = np.nanstd(statistic)
+        if show_fit:
+            _x = np.linspace(-2,2,100)
+            _y = gaussian(_x,*popt)
+            plt.plot(_x,_y,label='Fit')
+            plt.hist(statistic,bins=np.arange(-2,2.2,0.2),label=f'Raw ({len(statistic):,})')
+            display_fit = f'Fit:\nMean: {popt[1]:.2f}\nStd: {popt[2]:.2f}'
+            display_raw = f'Raw:\nMean: {np.nanmean(statistic):.2f}\nStd: {np.nanstd(statistic):.2f}'
+            plt.legend()
+            plt.title(f'[{bins[i]:.2f},{bins[i+1]:.2f}]')
+            plt.text(0.01,0.7,display_fit,transform=plt.gca().transAxes)
+            plt.text(0.01,0.5,display_raw,transform=plt.gca().transAxes)
+            plt.show()
+    if normalize:
+        bias_label = 'Fractional \nError'
+    else:
+        bias_label = r'Bias'
+
+    if colorbar:
+        # Keep the original layout
+        fig, (ax, ax2) = plt.subplots(2, 1, figsize=(6.5, 8), tight_layout=True, sharex=not colorbar,
+                                      gridspec_kw={'height_ratios': [6, 2]})
+        fig, ax = plot_hist2d(x, y, xlabel='', ylabel=ylabel, title=title, cmap=cmap, plot_line=plot_line,
+                              label_boxes=label_boxes, colorbar=colorbar, fig=fig, ax=ax, **pltkwargs)
+        if use_errorbar:
+            ax2.errorbar(bin_centers, bias, yerr=err, fmt='o', color='black', markersize=6)
+            ax2.set_ylabel(bias_label)
+        else:
+            ax2.scatter(bin_centers, bias, color='black', s=30,label=bias_label)
+            ax2.scatter(bin_centers, err, color='green', s=30, label='Resolution',marker='x')
+            #ax2.scatter(bin_centers, median, color='blue', s=30, label='Median',marker='s')
+            ax2.legend(fontsize=8,ncol=2)
+        ax2.axhline(0, ls='--', color='red')
+        ax2.set_xlabel(xlabel)
+        ax2.set_xlim([bins[0], bins[-1]])
+        #plotters.set_style(ax2)
+        return fig, (ax, ax2)
+    else:
+        # Create a 2x2 grid: top marginal, main, right marginal, bottom bias
+        fig = plt.figure(figsize=(8, 8))
+        gs = gridspec.GridSpec(2, 2, width_ratios=[6, 1.], height_ratios=[1., 6], hspace=0.01, wspace=0.01)
+        ax_main = fig.add_subplot(gs[1, 0])
+        ax_xhist = fig.add_subplot(gs[0, 0], sharex=ax_main)
+        ax_yhist = fig.add_subplot(gs[1, 1], sharey=ax_main)
+        # Hide tick labels on marginals
+        plt.setp(ax_xhist.get_xticklabels(), visible=False)
+        plt.setp(ax_yhist.get_yticklabels(), visible=False)
+        # 2D histogram
+        hist, xedges, yedges, im = ax_main.hist2d(x, y, bins=[bins, bins], cmap=cmap, **{k: v for k, v in pltkwargs.items() if k != 'bins'})
+        # Plot y=x line if requested
+        if plot_line:
+            xy_min = min(bins[0], bins[-1])
+            xy_max = max(bins[0], bins[-1])
+            ax_main.plot([xy_min, xy_max], [xy_min, xy_max], ls='--', color='red')
+        # 1D histograms
+        ax_xhist.hist(x, bins=bins, color='gray', alpha=0.7)
+        ax_yhist.hist(y, bins=bins, orientation='horizontal', color='gray', alpha=0.7)
+        # Remove spines between main and marginals
+        ax_xhist.spines['bottom'].set_visible(False)
+        ax_yhist.spines['left'].set_visible(False)
+        # Axis labels
+        #ax_main.set_xlabel(xlabel)
+        ax_main.set_ylabel(ylabel)
+        if title is not None:
+            ax_main.set_title(title)
+        # Set limits
+        ax_main.set_xlim([bins[0], bins[-1]])
+        ax_main.set_ylim([bins[0], bins[-1]])
+        ax_xhist.set_xlim([bins[0], bins[-1]])
+        ax_yhist.set_ylim([bins[0], bins[-1]])
+        # Bias/error bar plot below main plot
+        # Place it below the main plot using inset axes
+        from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+        ax2 = inset_axes(ax_main, width="100%", height="15%", loc='lower center', bbox_to_anchor=(0, -0.22, 1, 1),
+                         bbox_transform=ax_main.transAxes, borderpad=0)
+        if use_errorbar:
+            print('using errorbar')
+            ax2.errorbar(bin_centers, bias, yerr=err, fmt='o', color='black', markersize=6)
+            ax2.set_ylabel(bias_label)
+        else:
+            print('using scatter')
+            ax2.scatter(bin_centers, bias, color='black', markersize=6,label=bias_label)
+            ax2.scatter(bin_centers, err, color='black', markersize=6, label='Resolution',marker='x')
+            ax2.legend()
+        ax2.axhline(0, ls='--', color='red')
+        ax2.set_xlabel(xlabel)
+        ax2.set_xlim([bins[0], bins[-1]])
+        # Hide x labels on main plot to avoid overlap
+        plt.setp(ax_main.get_xticklabels(), visible=False)
+        #plotters.set_style(ax2)
+        return fig, (ax_main, ax2)
     
 
 def plot_hist_edges(edges,values,errors=None,label=None,ax=None,**pltkwargs):

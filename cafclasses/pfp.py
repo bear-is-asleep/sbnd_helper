@@ -35,12 +35,13 @@ class PFP(Particle):
     if isinstance(key,list):
       for i,k in enumerate(key):
         if i == 0:
-          thispfp = PFP(read_hdf_xrootd(fname,key=k,**kwargs))
+          thispfp = PFP(read_hdf_xrootd(fname,key=k),**kwargs)
         else:
-          thispfp.combine(PFP(read_hdf_xrootd(fname,key=k,**kwargs)))
+          thispfp.combine(PFP(read_hdf_xrootd(fname,key=k),**kwargs))
       return thispfp
     elif isinstance(key,str):
-      thispfp = PFP(read_hdf_xrootd(fname,key=key,**kwargs))
+      thispfp = PFP(read_hdf_xrootd(fname,key=key),**kwargs)
+      return thispfp
     else:
       raise ValueError(f'Invalid key: {key}')
   #-------------------- helpers --------------------#
@@ -57,10 +58,10 @@ class PFP(Particle):
     other = ~(is_trk | is_shw)
     return is_shw,is_trk,other
   def classify_pid(self,method='chi2',include_other=False
-                  ,length=25
+                  ,length=32
                   ,bdt_score=0.5
-                  ,chi2_muon=30
-                  ,chi2_proton=60 #cut on muon
+                  ,chi2_muon=20
+                  ,chi2_proton=95 #cut on muon
                   ,chi2_proton2=90 #cut on proton
                   ,dedx=2.5):
     """

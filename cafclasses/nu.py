@@ -4,7 +4,6 @@ from time import time
 from pyanalib import pandas_helpers
 from sbnd.detector.volume import *
 from sbnd.constants import *
-from sbnd.numu import selection as numusel
 from sbnd.cafclasses.object_calc import *
 from sbnd.cafclasses.parent import CAF
 

@@ -95,7 +95,7 @@ def load_univ_columns(fname=None, key=None, df_index=None, store=None):
 
 class CAF:
     #-------------------- constructor/rep --------------------#
-    def __init__(self,data,prism_bins=None,pot=None,livetime=None,**kwargs):
+    def __init__(self,data,prism_bins=None,pot=None,livetime=None,assert_data=False,duplicate_ok=False,**kwargs):
       if isinstance(data, pd.Series):
           self.data = pd.Series(data, **kwargs)
       elif isinstance(data, pd.DataFrame):
@@ -103,21 +103,39 @@ class CAF:
       else:
           raise ValueError("Invalid data type for CAF: " + str(type(data)))
       if not self.check_key_structure():
-        raise ValueError("key structure not correct")
+       print(self.data.keys())
+       raise ValueError("key structure not correct")
       self.set_prism_bins(prism_bins)
       self.pot = pot #POT to make sample
       self.livetime = livetime #livetime to make sample
       self.key_depth = self.key_length() #depth of keys
       if len(self.data.index.values) == 0:
-        print(f'WARNING: No data for CAF')
-        return None
+        if assert_data:
+          raise ValueError('No data for CAF')
+        else:
+          print(f'WARNING: No data for CAF')
+          return None
       self.index_depth = len(self.data.index.values[0]) #depth of indices
       self.index_names = self.data.index.names #names of indices
-      self.check_for_duplicates() #assert there are no indexing duplicates 
+      if not duplicate_ok:
+        self.check_for_duplicates() #assert there are no indexing duplicates 
       self.clean() #set dummy values to nan
       self.data.sort_index(inplace=True)
-    def copy(self,deep=True):
-      return CAF(self.data.copy(deep),pot=self.pot)
+    def copy(self,deep=True,duplicate_ok=False):
+      return CAF(self.data.copy(deep),pot=self.pot,duplicate_ok=duplicate_ok)
+    def load(fname,key,**kwargs):
+      if isinstance(key,list):
+        for i,k in enumerate(key):
+          if i == 0:
+            thiscaf = CAF(pd.read_hdf(fname,key=k,**kwargs),**kwargs)
+          else:
+            thiscaf.combine(CAF(pd.read_hdf(fname,key=k,**kwargs),**kwargs))
+        return thiscaf
+      elif isinstance(key,str):
+        thiscaf = CAF(pd.read_hdf(fname,key=key,**kwargs),**kwargs)
+        return thiscaf
+      else:
+        raise ValueError(f'Invalid key: {key}')
     def combine(self,other,duplicate_ok=False,offset=int(1e5)):
       """
       Combine two CAFs
@@ -206,12 +224,6 @@ class CAF:
       for key in self.__dir__():
         if key.startswith('fix_'):
           print(key)
-    #Get rid of this?
-    def keys(self):
-      return self.data.keys()
-    def load(fname,key='slice',**kwargs):
-      df = pd.read_hdf(fname,key=key,**kwargs)
-      return CAF(df,**kwargs)
     #-------------------- cutters --------------------#
     def apply_cut(self, cut_name, condition=None, cut=True):
       """
@@ -386,7 +398,7 @@ class CAF:
       cols_to_add = {col: updated_df[col] for col in new_cols}
       #print(cols_to_add.values())
       self.data = pd.concat([self.data, pd.DataFrame(cols_to_add)], axis=1)
-    def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True):
+    def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True,verbose=False):
       """
       Generalized method to add a column based on conditions and corresponding values.
 
@@ -457,12 +469,21 @@ class CAF:
       # print('add_cols conditions: ',conditions)
       for col, condition, value in zip(cols, conditions, values):
           try:
+            if verbose:
+              print(f'col: {col}')
+              print(f'condition: {condition[:10]}')
+              print(f'value: {value[:10]}')
+              #print(f'self.data.index: {self.data.index}')
+              #print(f'self.data.columns: {self.data.columns}')
             self.data.loc[condition, col] = value
+            if verbose:
+              print(f'self.data[col]: {self.data[col][:10]}')
           except:
             print(f'col: {col}')
             print(f'condition: {condition}')
             print(f'value: {value}')
             print(f'self.data.columns: {self.data.columns}')
+            print(f'self.data.index: {self.data.index}')
             raise
             
     def assign_bins(self,bins,key,df_comp=None,assign_key=None,low_to_high=True,mask=None,replace_nan=-1):
@@ -484,11 +505,28 @@ class CAF:
         # Get the converted column name (get_df_from_bins converts assign_key internally)
         assign_key_col = self.get_key(assign_key)[0] if assign_key is not None else 'binning'
         
+        # Convert categorical to int values for HDF5 compatibility
+        bin_values = result_masked[assign_key_col]
+        if pd.api.types.is_categorical_dtype(bin_values):
+          bin_values = bin_values.cat.codes.astype(int)
+          # Replace -1 codes (which represent NaN) with replace_nan
+          bin_values = bin_values.replace(-1, replace_nan)
+        
         # Only assign to the masked rows, preserving existing values for other rows
-        self.data.loc[mask, assign_key_col] = result_masked[assign_key_col].values
+        self.data.loc[mask, assign_key_col] = bin_values.values
       else:
         # No mask - assign to entire dataframe
         self.data = object_calc.get_df_from_bins(self.data,df_comp,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
+        
+        # Convert categorical to int values for HDF5 compatibility
+        assign_key_col = self.get_key(assign_key)[0] if assign_key is not None else 'binning'
+        if assign_key_col in self.data.columns:
+          bin_values = self.data[assign_key_col]
+          if pd.api.types.is_categorical_dtype(bin_values):
+            bin_values = bin_values.cat.codes.astype(int)
+            # Replace -1 codes (which represent NaN) with replace_nan
+            bin_values = bin_values.replace(-1, replace_nan)
+            self.data[assign_key_col] = bin_values
     def postprocess(self):
       """
       Run all post processing
@@ -506,8 +544,10 @@ class CAF:
         self.add_key(keys)
         cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
         self.data.loc[:,cols[0]] = np.ones(len(self.data)) #initialize to ones
-      elif not overwrite:
-        if not np.all(self.data.genweight == 1.):
+      if not np.all(self.data.genweight == 1.):
+        if overwrite:
+          self.data.genweight = np.ones(len(self.data))
+        else:
           raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
       print(f'--scaling to POT ({nom_pot/sample_pot:.2e}): {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
@@ -538,13 +578,16 @@ class CAF:
       """
       Use index of self to reference another object
       """
-      #I don't think we need this line anymore...
-      #if not object_calc.check_reference(self.data,ref.data): return None #check that the object can refer to the other one
+      #Update index depths, just in case
+      self.index_depth = len(self.data.index.values[0])
+      ref.index_depth = len(ref.data.index.values[0])
       if self.index_depth < ref.index_depth:
         ref_inds = utils.get_inds_from_sub_inds(set(ref.data.index.values),set(self.data.index.values),self.index_depth)
       elif self.index_depth > ref.index_depth:
         ref_inds = utils.get_sub_inds_from_inds(set(self.data.index.values),set(ref.data.index.values),ref.index_depth)
-      return ref.data.loc[ref_inds]
+      df = ref.data.loc[ref_inds]
+      df.sort_index(inplace=True)
+      return df
     def get_split(self,bins,key,df_comp=None,low_to_high=True):
       """
       Split self into list of self's split by bins determined by df_comp
@@ -640,6 +683,8 @@ class CAF:
         self : CAF
             Returns self for method chaining
         """
+        if suffix == '':
+            return self #Shortcut for null variation
         if not isinstance(self.data.columns, pd.MultiIndex):
             # For regular Index, just rename columns that end with suffix
             new_columns = [col.replace(suffix, '') if str(col).endswith(suffix) else col 
@@ -677,6 +722,7 @@ class CAF:
       return False
     def check_key_structure(self):
       #Keys should each be a tuple of the same size
+      if not isinstance(self.data.keys()[0], tuple): return True
       length = self.key_length()
       for i,key in enumerate(self.data.keys()[1:]):
         if len(key) != length: return False

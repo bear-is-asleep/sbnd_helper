@@ -15,14 +15,24 @@ import subprocess
 import h5py
 from .h5filemanager import H5FileManager
 
-def get_nperbin(series,bins,weights=None):
+def get_chi2_dof_pval_str(chi2,dof,pval,round_to=4):
+  chi2 = round(chi2,round_to)
+  chi2 = format_number_with_suffix(chi2,assert_greater_than_1=chi2 > 1)
+  dof = int(dof)
+  return r'$\chi^2$/dof = ' + f'{chi2}/{dof}, p = {pval:.2f}'
+
+def get_nperbin(series,bins,weights=None,sum_hists=False):
   """
   Count the number of events in each bin given a list of series and weights.
   """
+  if weights is None:
+    weights = [np.ones(len(s)) for s in series]
   assert len(series) == len(weights), f'Length of series and weights must be the same, {len(series)} != {len(weights)}'
   nperbin = []
   for i,s in enumerate(series):
     nperbin.append(np.histogram(s,bins=bins,weights=weights[i])[0])
+  if sum_hists:
+    nperbin = np.sum(nperbin, axis=0)
   return nperbin
 
 def h5py_file_xrootd(path, mode='r', **kwargs):
@@ -33,6 +43,10 @@ def read_hdf_xrootd(path, key=None, **kwargs):
     """Wrapper for pd.read_hdf that handles XRootD URLs."""
     with xrootd_file(path) as local_path:
         if key is not None:
+          if isinstance(key, list):
+            dfs = [pd.read_hdf(local_path, key=k, **kwargs) for k in key]
+            return pd.concat(dfs)
+          else:
             return pd.read_hdf(local_path, key=key, **kwargs)
         else:
             return pd.read_hdf(local_path, **kwargs)

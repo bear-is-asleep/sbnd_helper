@@ -24,6 +24,13 @@ CONT_VOL = [
   [30,500],#z - based on backup slide in https://sbn-docdb.fnal.gov/cgi-bin/sso/ShowDocument?docid=35996
 ]
 
+# Reject events in this region of the fiducial volume
+NOT_FV_HIGH_Z = [
+  [0,199.15-10],#x
+  [100,190],#y
+  [250,450],#z
+]
+
 #SBND volume
 FACE_AREA = 400**2 #cm^2
 SBND_THICKNESS = 500 #cm
@@ -34,6 +41,7 @@ ARGON_MOLAR_MASS = 39.95 #g/mol
 NUMBER_NUCLEONS = 40 #nucleons in argon
 ARGON_DENSITY = ARGON_MASS_DENSITY/ARGON_MOLAR_MASS*AVOGADRO_CONSTANT #n_argon/cm^3
 NUMBER_TARGETS = ARGON_DENSITY*SBND_VOLUME*NUMBER_NUCLEONS #Number of argon targets in active volume
-FV_VOLUME = np.prod([i[1]-i[0] for i in FV]) #cm^3
+#Subtract off the veto region
+FV_VOLUME = np.prod([i[1]-i[0] for i in FV]) - np.prod([i[1]-i[0] for i in NOT_FV_HIGH_Z]) #cm^3
 FV_AREA = np.prod([i[1]-i[0] for i in FV[1:]]) #cm^2
 NUMBER_TARGETS_FV = ARGON_DENSITY*FV_VOLUME*NUMBER_NUCLEONS #Number of nucleon targets in fiducial volume

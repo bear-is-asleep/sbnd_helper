@@ -10,6 +10,138 @@ import copy
 from pyanalib import pandas_helpers
 #from pyanalib import pandas_helpers
 
+def filter_by_common_indices(df,df_comp,indices,keep_nan=True):
+  """
+  Filter both df and df_comp to only keep rows where indices match.
+  This is memory efficient as it uses boolean indexing rather than copying dataframes.
+  
+  Parameters
+  ----------
+  df : pd.DataFrame
+    First dataframe to filter
+  df_comp : pd.DataFrame
+    Second dataframe to filter (comparison dataframe)
+  indices : list
+    List of index names or column names to match on. Can include tuple columns like ('truth','E').
+  keep_nan : bool, default True
+    If True, rows with NaN in any of the indices will be kept in both dataframes
+    without comparing them between dataframes.
+    
+  Returns
+  -------
+  tuple
+    (filtered_df, filtered_df_comp) - filtered versions of both dataframes
+  """
+  # Sort MultiIndex columns to avoid lexsort performance warnings
+  # Always sort if MultiIndex - the overhead is minimal and guarantees no warnings
+  if isinstance(df.columns, pd.MultiIndex):
+    df = df.sort_index(axis=1)
+  if isinstance(df_comp.columns, pd.MultiIndex):
+    df_comp = df_comp.sort_index(axis=1)
+  
+  # Helper to get column/index reference
+  def get_col_ref(df_inner, idx):
+    if idx in df_inner.index.names:
+      return ('index', idx)
+    elif idx in df_inner.columns:
+      return ('column', idx)
+    elif isinstance(idx, tuple) and idx in df_inner.columns:
+      return ('column', idx)
+    else:
+      # Try to find matching MultiIndex column
+      if isinstance(df_inner.columns, pd.MultiIndex):
+        for col in df_inner.columns:
+          if col == idx or (isinstance(idx, tuple) and len(col) == len(idx) and all(c1 == c2 for c1, c2 in zip(col, idx) if c1 and c2)):
+            return ('column', col)
+      raise ValueError(f"Index/column {idx} not found")
+  
+  # Get column references for both dataframes
+  df_col_refs = [get_col_ref(df, idx) for idx in indices]
+  df_comp_col_refs = [get_col_ref(df_comp, idx) for idx in indices]
+  
+  # Extract values as arrays for faster matching (avoid creating DataFrames)
+  def extract_match_arrays(df_inner, col_refs):
+    arrays = []
+    for ref_type, ref_name in col_refs:
+      if ref_type == 'index':
+        level_idx = df_inner.index.names.index(ref_name)
+        arrays.append(df_inner.index.get_level_values(level_idx).values)
+      else:
+        arrays.append(df_inner[ref_name].values)
+    return arrays
+  
+  df_arrays = extract_match_arrays(df, df_col_refs)
+  df_comp_arrays = extract_match_arrays(df_comp, df_comp_col_refs)
+  
+  # Cache index values to avoid repeated conversions
+  df_index_values = df.index.values
+  df_comp_index_values = df_comp.index.values
+  
+  if keep_nan:
+    # Identify rows with NaN - use vectorized operations (much faster)
+    df_has_nan = pd.Series(False, index=df.index, dtype=bool)
+    for arr in df_arrays:
+      df_has_nan |= pd.isna(arr)
+    
+    df_comp_has_nan = pd.Series(False, index=df_comp.index, dtype=bool)
+    for arr in df_comp_arrays:
+      df_comp_has_nan |= pd.isna(arr)
+    
+    # For non-NaN rows, use hash-based matching (much faster than merge)
+    df_non_nan_mask = ~df_has_nan.values
+    df_comp_non_nan_mask = ~df_comp_has_nan.values
+    
+    if df_non_nan_mask.any() and df_comp_non_nan_mask.any():
+      # Build dictionaries mapping tuples to index values (only for non-NaN rows)
+      df_non_nan_tuples = {}
+      for i in range(len(df)):
+        if df_non_nan_mask[i]:
+          match_tuple = tuple(arr[i] for arr in df_arrays)
+          df_non_nan_tuples[match_tuple] = df_index_values[i]
+      
+      df_comp_non_nan_tuples = {}
+      for i in range(len(df_comp)):
+        if df_comp_non_nan_mask[i]:
+          match_tuple = tuple(arr[i] for arr in df_comp_arrays)
+          df_comp_non_nan_tuples[match_tuple] = df_comp_index_values[i]
+      
+      # Find common tuples using set intersection (very fast)
+      common_tuples = set(df_non_nan_tuples.keys()) & set(df_comp_non_nan_tuples.keys())
+      
+      # Extract matching indices
+      df_common_idx = {df_non_nan_tuples[t] for t in common_tuples}
+      df_comp_common_idx = {df_comp_non_nan_tuples[t] for t in common_tuples}
+    else:
+      df_common_idx = set()
+      df_comp_common_idx = set()
+    
+    # Create boolean masks using cached index values
+    df_mask = df_has_nan | pd.Series([idx_val in df_common_idx for idx_val in df_index_values], index=df.index, dtype=bool)
+    df_comp_mask = df_comp_has_nan | pd.Series([idx_val in df_comp_common_idx for idx_val in df_comp_index_values], index=df_comp.index, dtype=bool)
+    
+    return df.loc[df_mask], df_comp.loc[df_comp_mask]
+  else:
+    # Use hash-based matching for all rows (much faster than merge)
+    if len(df) > 0 and len(df_comp) > 0:
+      # Build dictionaries mapping tuples to index values
+      df_tuples = {tuple(arr[i] for arr in df_arrays): df_index_values[i] for i in range(len(df))}
+      df_comp_tuples = {tuple(arr[i] for arr in df_comp_arrays): df_comp_index_values[i] for i in range(len(df_comp))}
+      
+      # Find common tuples using set intersection
+      common_tuples = set(df_tuples.keys()) & set(df_comp_tuples.keys())
+      
+      df_common_idx = {df_tuples[t] for t in common_tuples}
+      df_comp_common_idx = {df_comp_tuples[t] for t in common_tuples}
+    else:
+      df_common_idx = set()
+      df_comp_common_idx = set()
+    
+    # Create boolean masks
+    df_mask = pd.Series([idx_val in df_common_idx for idx_val in df_index_values], index=df.index, dtype=bool)
+    df_comp_mask = pd.Series([idx_val in df_comp_common_idx for idx_val in df_comp_index_values], index=df_comp.index, dtype=bool)
+  
+  return df.loc[df_mask], df_comp.loc[df_comp_mask]
+
 def get_neutrino_dir(start):
   """
   start is start location is either shower, pfp, or other 
@@ -209,8 +341,18 @@ def get_df_from_bins(df,df_comp,bins,key,assign_key='binning',low_to_high=True,n
     # Use pd.cut to assign bin labels
     #print(df_comp[key].shape,bins.shape)
     df[assign_key] = pd.cut(df_comp[key], bins, labels=range(len(bins)-1), right=False)
-    # Replace NaN values with -1
-    df[assign_key] = df[assign_key].cat.add_categories([-1]).fillna(replace_nan)
+    # Replace NaN values with replace_nan
+    df[assign_key] = df[assign_key].cat.add_categories([replace_nan]).fillna(replace_nan)
+    # Convert categorical to int values (HDF5 fixed format can't store categories)
+    # cat.codes maps categories to sequential codes (0,1,2,...), so replace_nan category gets code len(bins)-1
+    codes = df[assign_key].cat.codes.astype(int)
+    # Find which code corresponds to replace_nan category and map it back to replace_nan value
+    if replace_nan in df[assign_key].cat.categories:
+        replace_nan_code = df[assign_key].cat.categories.get_loc(replace_nan)
+        codes = codes.replace(replace_nan_code, replace_nan)
+    # Also handle -1 codes (which represent actual NaN values that weren't filled)
+    codes = codes.replace(-1, replace_nan)
+    df[assign_key] = codes
     return df
 
 def subtract_sets(set1, set2):

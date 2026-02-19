@@ -46,7 +46,7 @@ class ParticleGroup(CAF):
 
         #Set keys, values, and conditions
         self.add_cols(keys,[np.array(diff_s2s > diff_s2e).astype(np.float64)])
-    def add_stat_unc(self,nuniv=100):
+    def add_stat_unc(self,nuniv=100, n_events=None, progress_bar=False):
         """
         Add statistical uncertainty to the dataframe
         
@@ -65,7 +65,7 @@ class ParticleGroup(CAF):
         meta_seeds = []
         seen_seeds = set()
         
-        for i in tqdm(range(n_events), desc="Generating event seeds"):
+        for i in tqdm(range(n_events), desc="Generating event seeds", disable=not progress_bar):
             # Get event metadata from the dataframe index
             index_tuple = self.data.index[i]
             base_seed = hash(str(index_tuple)) % (2**32)
@@ -84,13 +84,13 @@ class ParticleGroup(CAF):
         
         # Verify all seeds are unique
         assert len(meta_seeds) == len(set(meta_seeds)), f"Non-unique seeds detected! Found {len(meta_seeds)} seeds but only {len(set(meta_seeds))} unique ones"
-        print(f"Successfully generated {len(meta_seeds)} unique seeds")
+        #print(f"Successfully generated {len(meta_seeds)} unique seeds")
         
         # Generate Poisson weights for each universe
         poisson_mean = 1.0
         all_poisson_weights = []
         
-        for uidx in tqdm(range(nuniv), desc="Generating universes"):
+        for uidx in tqdm(range(nuniv), desc="Generating universes", disable=not progress_bar):
             universe_seed = hash(f"universe_{uidx}") % (2**32)
             
             poisson_weights = []
@@ -103,7 +103,6 @@ class ParticleGroup(CAF):
                 poisson_weights.append(float(poisson_val))  # Convert to float
             
             all_poisson_weights.append(np.array(poisson_weights, dtype=float))
-        
         self.add_cols(univ_keys, all_poisson_weights)
 
     #-------------------- setters --------------------#
