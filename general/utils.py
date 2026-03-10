@@ -15,11 +15,25 @@ import subprocess
 import h5py
 from .h5filemanager import H5FileManager
 
-def get_chi2_dof_pval_str(chi2,dof,pval,round_to=4):
+def get_chi2_dof_pval_str(chi2,dof,pval,round_to=10):
   chi2 = round(chi2,round_to)
   chi2 = format_number_with_suffix(chi2,assert_greater_than_1=chi2 > 1)
   dof = int(dof)
   return r'$\chi^2$/dof = ' + f'{chi2}/{dof}, p = {pval:.2f}'
+
+def get_scientific_str(num, round_to=5):
+  if num == 0:
+    return r'$0$'
+
+  exponent = int(np.floor(np.log10(abs(num))))
+  base = num / (10 ** exponent)
+  base = round(base, round_to)
+
+  # Treat base numerically equal to 1 as pure power of ten
+  if abs(base - 1.0) < 10**(-round_to):
+    return rf'$10^{{{exponent}}}$'
+  else:
+    return rf'${base} \times 10^{{{exponent}}}$'
 
 def get_nperbin(series,bins,weights=None,sum_hists=False):
   """

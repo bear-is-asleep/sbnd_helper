@@ -8,20 +8,16 @@ import boost_histogram as bh
 import uproot
 
 class XSec:
-    def __init__(self, response, xsec_unit, bins,
+    def __init__(self, xsec_unit, bins,
                  bin_widths=None, name='xsec', variable=''):
         """
         Parameters
         ----------
-        response: array, response matrix
-        sig_truth: array, signal distribution binned by true variable (now provided per unfold)
         xsec_unit: float, xsec unit
         bins: array, binnning of variable
         name: str, name of the xsec
         variable: str, variable of the xsec
-        sel_background_reco: array, selection distribution binned by background reco variable (now provided per unfold)
         """
-        self.response = response
         self.xsec_unit = xsec_unit
         self.bins = bins
         self.bin_centers = (bins[:-1] + bins[1:]) / 2
@@ -43,29 +39,25 @@ class XSec:
         return stats.covariance_from_fraccov(fraccov, sigma_tilde)
 
     def _init_unfold_record(self, name):
-        """
-        Ensure an unfold_results entry exists for a given name, with all keys present.
-        This lets smear / unfold update only their relevant pieces without kludgy checks.
-        """
-        if name not in self.unfold_results:
-            self.unfold_results[name] = {
-                'C_type': None,
-                'Norm_type': None,
-                'fractional_cov': None,
-                'input_cov': None,
-                'unfold_cov': None,
-                'AddSmear': None,
-                'unfold': None,
-                'sig_truth': None,
-                'sel_background': None,
-                'sigma_tilde': None,
-                'sig_smear': None,
-                'sig_unfold': None,
-                'fracunc': None,
-                'chi2': None,
-                'dof': None,
-                'pval': None,
-            }
+        self.unfold_results[name] = {
+            'C_type': None,
+            'Norm_type': None,
+            'fractional_cov': None,
+            'input_cov': None,
+            'unfold_cov': None,
+            'AddSmear': None,
+            'unfold': None,
+            'sig_truth': None,
+            'sel_background': None,
+            'sigma_tilde': None,
+            'sig_smear': None,
+            'sig_unfold': None,
+            'fracunc': None,
+            'chi2': None,
+            'dof': None,
+            'pval': None,
+            'response': None,
+        }
         return self.unfold_results[name]
 
     def _compute_wiener(
@@ -73,6 +65,7 @@ class XSec:
         cov,
         sel,
         sig_truth,
+        response,
         sel_background=None,
         sigma_tilde=None,
         C_type=2,
@@ -87,7 +80,7 @@ class XSec:
         """
         if sel_background is not None:
             sigma_tilde = stats.compute_sigma_tilde(
-                self.response,
+                response,
                 sig_truth,
                 sel_background,
                 self.xsec_unit,
@@ -109,16 +102,17 @@ class XSec:
         if verbose:
             print(f'sig: {sig}')
             print(f'sel: {sel}')
-            print(f'sig@response: {sig @ self.response}')
-            print(f'sig@response - sel: {sig @ self.response - sel}')
+            print(f'sig@response: {sig @ response}')
+            print(f'sig@response - sel: {sig @ response - sel}')
             print(f'sqrt(cov diag): {np.sqrt(np.diag(input_cov))}')
             print(f'sqrt(cov diag)/sel*100: {(np.sqrt(np.diag(input_cov)) / sel) * 100}')
             print(f'sigma_tilde: {sigma_tilde}')
             print(f'xsec_unit: {self.xsec_unit}')
             print(f'bins: {self.bins}')
+            print(f'bin_widths: {self.bin_widths}')
 
         unfold_dict = wienersvd.WienerSVD(
-            self.response,
+            response,
             sig,
             sel,
             input_cov,
@@ -141,14 +135,14 @@ class XSec:
             print(f'sig_unfold_bw: {sig_unfold_bw}')
             print(f'sig_smear_bw: {sig_smear_bw}')
             print(f'unfold cov diag: {np.diag(unfold_cov)}')
-        chi2, dof, pval = stats.calc_chi2(sig_unfold_bw, sig_smear_bw, unfold_cov)
+        chi2, dof, pval = stats.calc_chi2(sig_unfold_bw, sig_smear_bw, unfold_cov,pinv_rcond=1e-4,diagnose=verbose)
         chi2_dof_pval_str = utils.get_chi2_dof_pval_str(chi2, dof, pval)
 
         # Optional per-test sigma_tilde if a background is provided
         sigma_tilde = None
         if sel_background is not None:
             sigma_tilde = stats.compute_sigma_tilde(
-                self.response,
+                response,
                 sig_truth,
                 sel_background,
                 self.xsec_unit,
@@ -162,6 +156,7 @@ class XSec:
             'unfold_cov': unfold_cov,
             'AddSmear': unfold_dict['AddSmear'],
             'unfold': unfold_dict['unfold'],
+            'response': response,
             'sig_truth': sig_truth,
             'sel_background': sel_background,
             'sigma_tilde': sigma_tilde,
@@ -172,6 +167,8 @@ class XSec:
             'dof': dof,
             'pval': pval,
             'chi2_dof_pval_str': chi2_dof_pval_str,
+            'sig_smear_bw': sig_smear_bw,
+            'sig_unfold_bw': sig_unfold_bw,
         }
 
     def unfold(
@@ -182,6 +179,12 @@ class XSec:
         sel_background=None,
         sigma_tilde=None,
         name=None,
+        response=None,
+        sel_truth=None,
+        sel_sig_reco=None,
+        sel_sig_truth=None,
+        genweights_sel_sig=None,
+        bins=None,
         **kwargs,
     ):
         """
@@ -193,17 +196,49 @@ class XSec:
         sel: array, selection distribution binned by reco variable
         sig_truth: array, signal truth spectrum for this test
         sel_background: array, background spectrum used to compute sigma_tilde
+        sigma_tilde: array, precomputed sigma_tilde (used only if sel_background is None)
         name: str, label for this unfold configuration (defaults to self.name)
+        response: 2D array or None
+            If provided, use this response matrix directly.
+        sel_truth, sel_sig_reco, sel_sig_truth, genweights_sel_sig:
+            If response is None, these must all be provided to construct the
+            response matrix via stats.get_response_matrix for this unfold.
         **kwargs: additional keyword arguments for _compute_wiener
         """
         if name is None:
             name = self.name
         record = self._init_unfold_record(name)
+        # Determine or build the response matrix for this configuration.
+        if response is None:
+            builder_args = [sel_truth, sel_sig_reco, sel_sig_truth, genweights_sel_sig]
+            if any(arg is None for arg in builder_args):
+                raise ValueError(
+                    'Either response must be provided directly '
+                    'or sel_truth, sel_sig_reco, sel_sig_truth, genweights_sel_sig '
+                    'must all be provided to construct it'
+                )
+            if bins is None:
+                bins = self.bins
+            #Check that all values fall within the bins
+            for i,arr in enumerate([sel_sig_reco, sel_sig_truth]):
+                if np.any(arr < bins[0]) or np.any(arr > bins[-1]):
+                    print('Order of arrays is: sel_sig_reco, sel_sig_truth')
+                    raise ValueError(f'Value {arr[np.any(arr < bins[0]) or np.any(arr > bins[-1])]} is out of bins {bins} for {i}^th array')
+            response = stats.get_response_matrix(
+                sig_truth=sig_truth,
+                sel_truth=sel_truth,
+                sel_sig_reco=sel_sig_reco,
+                sel_sig_truth=sel_sig_truth,
+                genweights_sel_sig=genweights_sel_sig,
+                bins=bins,
+            )
         core = self._compute_wiener(
             cov=cov,
             sel=sel,
             sig_truth=sig_truth,
+            response=response,
             sel_background=sel_background,
+            sigma_tilde=sigma_tilde,
             **kwargs,
         )
         # Update all fields relevant to a full unfolding
@@ -223,7 +258,6 @@ class XSec:
         os.makedirs(meta_dir, exist_ok=True)
         # Core metadata arrays (truth and backgrounds are now per-unfold and live in unfold_results)
         np.savetxt(os.path.join(meta_dir, f'{self.variable}_bins.csv'), self.bins)
-        np.savetxt(os.path.join(meta_dir, f'{self.variable}_response.csv'), self.response)
         np.savetxt(os.path.join(meta_dir, f'{self.variable}_bin_widths.csv'), self.bin_widths)
         if getattr(self, 'sigma_tilde', None) is not None:
             np.savetxt(os.path.join(meta_dir, f'{self.variable}_sigma_tilde.csv'), self.sigma_tilde)
@@ -268,7 +302,7 @@ class XSec:
                         with open(path_base + '.txt', 'w') as f:
                             f.write(str(val))
 
-    def to_nuisance(self, save_dir, name=None, filename_suffix='xsec', scale=1.):
+    def to_nuisance(self, save_dir, name, filename_suffix='xsec', scale=1.):
         """
         Write covariance matrix, unfolded spectrum, and smearing matrix to a ROOT file
         in uboone data-release style: covariance_matrix (TH2D), smearing_matrix (TH2D),
@@ -286,19 +320,18 @@ class XSec:
         scale : float, optional
             Scale factor for the unfolded spectrum, covariance matrix, and smearing matrix.
         """
-        key = name if name is not None else self.name
-        if key not in self.unfold_results:
-            raise RuntimeError(f'unfold config "{key}" not found; run unfold() for this config first')
-        save_dir = os.path.join(save_dir,key)
+        if name not in self.unfold_results:
+            raise RuntimeError(f'unfold config "{name}" not found; run unfold("{name}") for this config first')
+        save_dir = os.path.join(save_dir,name)
         filename = f'{self.variable}_{filename_suffix}.root'
-        record = self.unfold_results[key]
+        record = self.unfold_results[name]
         unfold = record.get('unfold')
         unfold_cov = record.get('unfold_cov')
         add_smear = record.get('AddSmear')
         if unfold is None or unfold_cov is None or add_smear is None:
             raise RuntimeError(
-                f'unfold config "{key}" missing unfold, unfold_cov, or AddSmear; '
-                'run unfold() for this config first'
+                f'unfold config "{name}" missing unfold, unfold_cov, or AddSmear; '
+                f'run unfold("{name}") for this config first'
             )
         n = len(unfold)
         bins = np.asarray(self.bins, dtype=np.float64)
@@ -340,7 +373,6 @@ class XSec:
         if not os.path.exists(meta_dir):
             raise ValueError(f'Metadata directory not found in {load_dir}')
         bins = np.loadtxt(os.path.join(meta_dir, f'{variable}_bins.csv'))
-        response = np.loadtxt(os.path.join(meta_dir, f'{variable}_response.csv'))
         bin_widths = np.loadtxt(os.path.join(meta_dir, f'{variable}_bin_widths.csv'))
         sigma_tilde_path = os.path.join(meta_dir, f'{variable}_sigma_tilde.csv')
         sigma_tilde = np.loadtxt(sigma_tilde_path) if os.path.exists(sigma_tilde_path) else None
@@ -357,7 +389,6 @@ class XSec:
         else:
             name = 'xsec'
         instance = cls(
-            response=response,
             xsec_unit=xsec_unit,
             bins=bins,
             bin_widths=bin_widths,

@@ -264,9 +264,11 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
       total_mc = sum([round(np.sum(w)) for w in weights])
     data_counts = data_counts * (total_mc/len(data_series))
     data_stds = data_stds * (total_mc/len(data_series))
-  data_err = 1/data_stds
+  with np.errstate(divide='ignore', invalid='ignore'):
+    data_err = 1/data_stds
   # Calculate ratio
-  mc_counts = np.asarray(n_perbin)
+  with np.errstate(divide='ignore', invalid='ignore'):
+    mc_counts = np.asarray(n_perbin)
   ratio = data_counts / mc_counts
 
   

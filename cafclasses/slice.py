@@ -4,6 +4,7 @@ from .particlegroup import ParticleGroup
 from sbnd.detector.volume import *
 from sbnd.constants import *
 from sbnd.general.utils import read_hdf_xrootd
+import numpy as np
 
 
 class CAFSlice(ParticleGroup):
@@ -198,6 +199,74 @@ class CAFSlice(ParticleGroup):
       #Get slices with muons
       mask = (self.data.loc[:,col] == True).values.flatten()
       self.add_cols(keys,mask,fill=False)
+    def add_2d_binning(self, costheta_bins=None, momentum_bins=None, momentum_bins_2d=None,
+                              include_truth=True, include_reco=True):
+      """
+      Add 2D muon phase space binning for truth and/or reco.
+      Uses costheta dependent momentum binning when momentum_bins_2d is provided.
+      """
+      from sbnd.numu.numu_constants import (
+        DIFF_COSTHETA_BINS,
+        DIFF_MOMENTUM_BINS_2D,
+        N_DIFF_COSTHETA_BINS,
+      )
+      if costheta_bins is None:
+        costheta_bins = DIFF_COSTHETA_BINS
+      if momentum_bins_2d is None:
+        momentum_bins_2d = DIFF_MOMENTUM_BINS_2D
+
+      costheta_bins = np.asarray(costheta_bins)
+      momentum_bins_2d = np.asarray(momentum_bins_2d)
+
+      n_costheta_bins = len(costheta_bins) - 1
+      if n_costheta_bins != N_DIFF_COSTHETA_BINS:
+        raise ValueError(f'n_costheta_bins {n_costheta_bins} does not match N_DIFF_COSTHETA_BINS {N_DIFF_COSTHETA_BINS}')
+      if momentum_bins_2d.shape[0] != n_costheta_bins:
+        raise ValueError(f'momentum_bins_2d has {momentum_bins_2d.shape[0]} rows, expected {n_costheta_bins}')
+
+      # Truth binning
+      if include_truth and self.check_key('truth.mu.dir.z') and self.check_key('truth.mu.totp'):
+        self.assign_bins(costheta_bins, 'truth.mu.dir.z', assign_key='true_bin.costheta')
+        for cbin in range(n_costheta_bins):
+          mask = (self.data.true_bin.costheta.values.astype(float) == float(cbin))
+          if not np.any(mask):
+            continue
+          self.assign_bins(
+            momentum_bins_2d[cbin],
+            'truth.mu.totp',
+            assign_key='true_bin.momentum',
+            mask=mask,
+          )
+        cols = self.get_key(['true_bin.costheta','true_bin.momentum'])
+        mask = self.data.loc[:,cols].values.astype(float) >= 0
+        mask = np.all(mask, axis=1)
+        differential_bins = (
+          self.data.true_bin.costheta.values.astype(float)
+          + self.data.true_bin.momentum.values.astype(float) * n_costheta_bins
+        )
+        self.add_cols('true_bin.differential', differential_bins[mask], conditions=mask, fill=-1.0)
+
+      # Reco binning
+      if include_reco and self.check_key('mu.pfp.trk.costheta') and self.check_key('mu.pfp.trk.P.p_muon'):
+        self.assign_bins(costheta_bins, 'mu.pfp.trk.costheta', assign_key='bin.costheta')
+        for cbin in range(n_costheta_bins):
+          mask = (self.data.bin.costheta.values.astype(float) == float(cbin))
+          if not np.any(mask):
+            continue
+          self.assign_bins(
+            momentum_bins_2d[cbin],
+            'mu.pfp.trk.P.p_muon',
+            assign_key='bin.momentum',
+            mask=mask,
+          )
+        cols = self.get_key(['bin.costheta','bin.momentum'])
+        mask = self.data.loc[:,cols].values.astype(float) >= 0
+        mask = np.all(mask, axis=1)
+        differential_bins = (
+          self.data.bin.costheta.values.astype(float)
+          + self.data.bin.momentum.values.astype(float) * n_costheta_bins
+        )
+        self.add_cols('bin.differential', differential_bins[mask], conditions=mask, fill=-1.0)
     def add_in_av(self):
       """
       Add containment 1 or 0 for each pfp

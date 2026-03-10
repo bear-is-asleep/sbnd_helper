@@ -1,0 +1,84 @@
+Parameter Description fM N CEl
+A
+Axial mass for NC elastic fηN CEl Strange axial form factor for NC elastic f2p2h Normalisation uncertainty for 2p2h interactions fM CCRes
+V Vector mass for CC resonance neutrino production fM N CRes
+V Vector mass for NC resonance neutrino production fAHT Higher-twist parameter A for NC and CC DIS events fBHT Higher-twist parameter B for NC and CC DIS events fCv1u Valence p.d.f. correction factor Cv1u for DIS events fCv2u Valence p.d.f. correction factor Cv2u for DIS events fM Coh
+A Axial mass for NC and CC coherent pion production fRCoh
+0 Nuclear size parameter controlling π absorption f∆→N γ Branching ratio for ∆ radiative decay 
+
+Parameter Description fλπ Intranuclear mean free path for pions fRCEx
+π Intranuclear charge exchange rescattering fraction for pions fRInel
+π Intranuclear inelastic rescattering fraction for pions fRπ
+π Intranuclear pion-production rescattering fraction for pions fRAbs
+π Intranuclear absorption fraction for pions fλN Intranuclear mean free path for nucleons fRCEx
+N Intranuclear charge exchange rescattering fraction for nucleons fRInel
+N Intranuclear inelastic rescattering fraction for nucleons fRπ
+N Intranuclear pion-production rescattering fraction for nucleons fRAbs
+N Intranuclear absorption fraction for nucleons 
+
+fσN
+IN EL Secondary nucleon interactions in the target (Be)
+and horn (Al), inelastic cross-section
+fσN
+QE Secondary nucleon interactions in the target (Be)
+and horn (Al), quasi-elastic cross-section
+fσN
+T OT Secondary nucleon interactions in the target (Be)
+and horn (Al), total cross-section
+fσπ
+IN EL Secondary pion interactions in the target (Be) and
+horn (Al), inelastic cross-section
+fσπ
+QE Secondary pion interactions in the target (Be) and
+horn (Al), quasi-elastic cross-section
+fσπ
+T OT Secondary pion interactions in the target (Be) and
+horn (Al), total cross-section
+
+fSkinEf f ect Depth that the current penetrates the horn conductor fHornCurrent Current running in the horn conductor 
+
+fπ+ ν production mechanism: π+ fπ− ν production mechanism: π− fK+ ν production mechanism: K+ fK− ν production mechanism: K− fK0 ν production mechanism: K0
+
+fM CCQE
+Axial mass for CC quasi-elastic A
+fM CCRes
+A Axial mass for CC resonance neutrino production fM N CRes
+A Axial mass for NC resonance neutrino production fN C Additional error on NC/CC ratio fnRCC1π
+νn Non-resonance bkg normalisation in νn CC1π reactions fnRCC1π
+νp Non-resonance bkg normalisation in νp CC1π reactions fnRCC2π
+νn Non-resonance bkg normalisation in νn CC2π reactions fnRCC2π
+νp Non-resonance bkg normalisation in νp CC2π reactions fnRCC1π
+¯
+νn
+Non-resonance bkg normalisation in¯
+νn CC1π reactions fnRCC1π
+¯
+νp
+Non-resonance bkg normalisation in¯
+νp CC1π reactions fnRCC2π
+¯
+νn
+Non-resonance bkg normalisation in¯
+νn CC2π reactions fnRCC2π
+¯
+νp
+Non-resonance bkg normalisation in¯
+νp CC2π reactions fnRN C1π
+νn Non-resonance bkg normalisation in νn NC1π reactions fnRN C1π
+νp Non-resonance bkg normalisation in νp NC1π reactions fnRN C2π
+νn Non-resonance bkg normalisation in νn NC2π reactions fnRN C2π
+νp Non-resonance bkg normalisation in νp NC2π reactions fnRN C1π
+¯
+νn
+Non-resonance bkg normalisation in¯
+νn NC1π reactions fnRN C1π
+¯
+νp
+Non-resonance bkg normalisation in¯
+νp NC1π reactions fnRN C2π
+¯
+νn
+Non-resonance bkg normalisation in¯
+νn NC2π reactions fnRN C2π
+Non-resonance bkg normalisation in¯
+νp NC2π reactions

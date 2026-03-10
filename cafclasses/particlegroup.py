@@ -46,7 +46,7 @@ class ParticleGroup(CAF):
 
         #Set keys, values, and conditions
         self.add_cols(keys,[np.array(diff_s2s > diff_s2e).astype(np.float64)])
-    def add_stat_unc(self,nuniv=100, n_events=None, progress_bar=False):
+    def add_stat_unc(self,nuniv=100, progress_bar=False):
         """
         Add statistical uncertainty to the dataframe
         
@@ -278,9 +278,10 @@ class ParticleGroup(CAF):
             signal_events = partgrp_cut_df.loc[reco_inds].genweight.sum()
             total_events = partgrp_cut_df.genweight.sum()
             #print(f'-cut: {cut}, truth_events: {truth_events}, signal_events: {signal_events}, total_events: {total_events}')
-            pur[i+1] = signal_events/total_events #purity
-            eff[i+1] = truth_events/init_truth
-            f1[i+1] = 2*eff[i+1]*pur[i+1]/(eff[i+1]+pur[i+1])
+            with np.errstate(divide='ignore', invalid='ignore'):
+                eff[i+1] = truth_events/init_truth
+                pur[i+1] = signal_events/total_events
+                f1[i+1] = 2*eff[i+1]*pur[i+1]/(eff[i+1]+pur[i+1])
             true_events[i+1] = truth_events
             reco_events[i+1] = total_events
             events_by_cat[i+1] = partgrp_cut_df.groupby(event_col).genweight.sum().reindex(event_types, fill_value=0).values.tolist()
@@ -309,146 +310,5 @@ class ParticleGroup(CAF):
         if normalize:
             df = df.div(df.sum(axis=1), axis=0)
         return df
-    def get_covariance(self,univ_key,var_key,bins,stat=False,scale=1.,scale_cov=1.,verbose=False,rot90=False,ret_all=False):
-        """
-        Get covariance matrix for a given variable
-        
-        Parameters
-        ----------
-        univ_key : str
-            Key pattern for universe weights (e.g., 'truth.stat.univ_')
-        var_key : str
-            Key for the variable to calculate covariance for
-        bins : array_like
-            Bin edges for the variable
-        scale : float
-            Scale factor for the variable
-        stat : bool
-            If True, use statistical uncertainty - just do the sqrt of the central value
-        verbose : bool
-            If True, print verbose output
-        rot90 : bool
-            If True, rotate the covariance matrix by 90 degrees
-        scale_cov : float
-            Scale factor for the covariance matrix
-        ret_all : bool
-            If True, return the unscaled covariance matrix, the correlation matrix, and the fractional covariance matrix
-        Returns
-        -------
-        covariance_matrix : ndarray
-            Covariance matrix for the variable
-        """
-        # Get the variable data
-        var_col = self.get_key(var_key)
-        data = self.data[var_col].values.flatten() * scale
-
-        # Get bin indices for each data point
-        if verbose:
-            print(f"Data shape: {data.shape}, Data range: {data.min():.3f} to {data.max():.3f}")
-        bin_indices = np.digitize(data, bins) - 1
-        valid_indices = (bin_indices >= 0) & (bin_indices < len(bins) - 1)
-        bin_indices = bin_indices[valid_indices]
-        if np.sum(valid_indices) != len(data):
-            print(f"Warning: {np.sum(valid_indices)} out of {len(data)} data points are valid")
-
-        # Central value histogram (unweighted)
-        n_bins = len(bins) - 1
-        cv_histogram = np.zeros(n_bins)
-        np.add.at(cv_histogram, bin_indices, self.data.genweight.values[valid_indices]) #Scale by genweight
-        
-        if stat:
-            unscaled_covariance_matrix = np.diag(cv_histogram)
-            covariance_matrix = unscaled_covariance_matrix * scale_cov ** 2
-            if not ret_all:
-                return np.rot90(covariance_matrix) if rot90 else covariance_matrix #Return early
-            sd = np.sqrt(np.diag(1/unscaled_covariance_matrix))
-            correlation_matrix = sd @ unscaled_covariance_matrix @ sd.T
-            fractional_covariance_matrix = unscaled_covariance_matrix / (np.diag(unscaled_covariance_matrix)[:, np.newaxis] * np.diag(unscaled_covariance_matrix)[np.newaxis, :])
-            if rot90:
-                covariance_matrix = np.rot90(covariance_matrix)
-                unscaled_covariance_matrix = np.rot90(unscaled_covariance_matrix)
-                correlation_matrix = np.rot90(correlation_matrix)
-                fractional_covariance_matrix = np.rot90(fractional_covariance_matrix)
-            return covariance_matrix, unscaled_covariance_matrix, correlation_matrix, fractional_covariance_matrix
-        
-        # Get all universe weight columns that match the pattern
-        univ_cols = []
-        if '.' in univ_key:
-            # Handle pattern like 'truth.stat' - match first two elements
-            key_parts = univ_key.split('.')
-            for col in self.data.columns:
-                if (isinstance(col, tuple) and len(col) >= 2 and 
-                    col[0] == key_parts[0] and col[1] == key_parts[1]):
-                    univ_cols.append(col)
-        else:
-            # Handle simple string matching
-            univ_cols = [col for col in self.data.columns if univ_key in str(col)]
-        
-        if not univ_cols:
-            raise ValueError(f"No universe weight columns found matching pattern: {univ_key}")
-        
-        if verbose:
-            print(f"Found {len(univ_cols)} universe weight columns")
-            print(f"First few columns: {univ_cols[:5]}")
-        
-        # Stack universe weights into a 2D array (events x universes)
-        universe_weights = np.column_stack([self.data[col].values for col in univ_cols])
-        filtered_weights = universe_weights[valid_indices, :]
-        
-        # Handle NaN values in weights - replace with 1.0 (no weight)
-        if np.isnan(filtered_weights).any():
-            print(f"Warning: Found {np.isnan(filtered_weights).sum()} NaN values in universe weights, replacing with 1.0")
-            filtered_weights = np.nan_to_num(filtered_weights, nan=1.0)
-        
-        # Create histogram for each universe
-        n_universes = universe_weights.shape[1]
-        histogram = np.zeros((n_bins, n_universes))
-        
-        # Fill histograms using np.add.at for proper binning
-        for i in range(n_universes):
-            np.add.at(histogram[:, i], bin_indices, filtered_weights[:, i] * self.data.genweight.values[valid_indices]) #Scale by genweight
-        
-
-        if verbose:
-            print(f"Histogram shape: {histogram.shape}")
-            print(f"CV histogram shape: {cv_histogram.shape}")
-            print(f"CV histogram range: {cv_histogram.min():.3f} to {cv_histogram.max():.3f}")
-            print(f"CV histogram sum: {cv_histogram.sum():.3f}")
-            print(f"Histogram range: {histogram.min():.3f} to {histogram.max():.3f}")
-            print(f"Histogram has NaN: {np.isnan(histogram).any()}")
-            print(f"Filtered weights range: {filtered_weights.min():.3f} to {filtered_weights.max():.3f}")
-            print(f"Filtered weights has NaN: {np.isnan(filtered_weights).any()}")
-        
-            
-        # Calculate covariance matrix with respect to the central value
-        diff = histogram - cv_histogram[:, np.newaxis]
-        diff_fractional = diff / (cv_histogram[:, np.newaxis] + 1e-10)  # Add small epsilon to avoid division by zero
-        if verbose:
-            print(f"Diff shape: {diff.shape}")
-            print(f"Diff range: {diff.min():.3f} to {diff.max():.3f}")
-            print(f"Diff has NaN: {np.isnan(diff).any()}")
-        
-        # Calculate fractional covariance first
-        fractional_cov = (diff_fractional @ diff_fractional.T) / n_universes
-
-        # Then scale by the central value histogram 
-        covariance_matrix = np.zeros_like(fractional_cov)
-        for i in range(len(cv_histogram)):
-            for j in range(len(cv_histogram)):
-                covariance_matrix[i, j] = fractional_cov[i, j] * (cv_histogram[i] * cv_histogram[j]) * (scale_cov ** 2)
-        if verbose:
-            print(f"Covariance matrix shape: {covariance_matrix.shape}")
-            print(f"Covariance matrix has NaN: {np.isnan(covariance_matrix).any()}")
-            print(f"Covariance matrix range: {np.nanmin(covariance_matrix):.6f} to {np.nanmax(covariance_matrix):.6f}")
-        
-        return np.rot90(covariance_matrix) if rot90 else covariance_matrix
-        
-    def get_numevents(self):
-        """
-        Get number of events from gen weights
-        """
-        if self.check_key('genweight'):
-            return self.data.genweight.sum()
-        raise ValueError('genweight not in dataframe. Run scale_to_pot first')
         
         

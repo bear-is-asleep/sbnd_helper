@@ -107,7 +107,8 @@ def construct_covariance(cv_evts, var_evts, scale_cov=1., rank=None, do_correct_
   iters = None
 
   correlation, stds = construct_correlation_matrix(covariance_matrix)
-  fractional_uncertainty = np.where(cv > 0, stds / cv, 0.)
+  with np.errstate(divide='ignore', invalid='ignore'):
+    fractional_uncertainty = np.where(cv > 0, stds / cv, 0.)
 
   return covariance_matrix, cov_unaltered, fractional_cov, fractional_cov_unaltered, correlation, fractional_uncertainty, iters
 
@@ -140,17 +141,19 @@ def construct_correlation_matrix(covariance_matrix):
   """
   stds = np.sqrt(np.diag(covariance_matrix))
   correlation = np.zeros_like(covariance_matrix)
-  for i in range(len(stds)):
-    for j in range(len(stds)):
-      correlation[i,j] = covariance_matrix[i,j] / (stds[i] * stds[j])
-  return correlation,stds
+  with np.errstate(divide='ignore', invalid='ignore'):
+    for i in range(len(stds)):
+      for j in range(len(stds)):
+        correlation[i, j] = covariance_matrix[i, j] / (stds[i] * stds[j])
+  return correlation, stds
 
 def get_fractional_uncertainty(cv,covariance_matrix):
   """
   Get the fractional uncertainty from a covariance matrix and CV
   """
   stds = np.sqrt(np.diag(covariance_matrix))
-  fractional_uncertainty = stds / cv
+  with np.errstate(divide='ignore', invalid='ignore'):
+    fractional_uncertainty = stds / cv
   #Set nan values to 0
   fractional_uncertainty = np.nan_to_num(fractional_uncertainty)
   #Set infinite values to 0
@@ -179,7 +182,8 @@ def get_total_unc(cv,unc,allow_negative=False):
     if np.any(unc < 0):
       raise ValueError('Fractional uncertainty is negative')
   cv_sum = np.nansum(cv) if hasattr(cv, '__len__') else cv
-  total_uncertainty = np.sqrt(np.nansum(unc**2 * cv/cv_sum))
+  with np.errstate(divide='ignore', invalid='ignore'):
+    total_uncertainty = np.sqrt(np.nansum(unc**2 * cv/cv_sum))
   return total_uncertainty
 
 def calc_mean_hist(hist_vals, hist_edges):
@@ -226,6 +230,8 @@ def get_smear_matrix(true_var, reco_var, bins, weights=None):
     reco_vs_true : ndarray
         Smearing matrix (reco_vs_true.T is the response matrix shape)
     """
+    if len(true_var) != len(reco_var) != len(weights):
+      raise ValueError(f'True, reco, and weights must have the same length: {len(true_var)}, {len(reco_var)}, {len(weights)}')
     reco_vs_true, _, _ = np.histogram2d(true_var, reco_var, bins=bins, weights=weights)
     return reco_vs_true
 
@@ -246,10 +252,9 @@ def compute_efficiency(sig_truth, sel_truth):
     eff_truth : ndarray
         Efficiency histogram
     """
-    # Efficiency = selected_truth / signal_truth
-    eff_truth = np.where(sig_truth > 0, sel_truth / sig_truth, 0.0)
-    # Handle division by zero
-    eff_truth = np.where(sig_truth > 0, eff_truth, 0.0)
+    # Efficiency = selected_truth / signal_truth (suppress divide-by-zero; we use 0.0 when sig_truth==0)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        eff_truth = np.where(sig_truth > 0, sel_truth / sig_truth, 0.0)
     return eff_truth
 
 
@@ -298,6 +303,15 @@ def convert_smearing_to_response(smearing,eff):
   """
   denom = np.sum(smearing.T,axis=0)
   response = np.divide(smearing.T*eff,denom,out=np.zeros_like(smearing,dtype=float),where=denom!=0)
+  return response
+
+def get_response_matrix(sig_truth, sel_truth, sel_sig_reco, sel_sig_truth, genweights_sel_sig, bins):
+  """
+  Compute the response matrix from the truth and reco histograms.
+  """
+  eff_truth = compute_efficiency(sig_truth, sel_truth)
+  smearing = get_smear_matrix(sel_sig_truth, sel_sig_reco, bins, weights=genweights_sel_sig)
+  response = convert_smearing_to_response(smearing, eff_truth)
   return response
 
 def shrink_covariance_oasd(S, n=None, mean_known=False):
@@ -501,7 +515,8 @@ def correct_negative_eigenvalues(cov, scale_from_max=0., max_iter=1000, tol=0.):
         cov_corrected = (eigvecs * eigvals) @ eigvecs.T
     return cov_corrected, iters
 
-def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, diagnose=False, filter_min=-np.inf, rank=None):
+def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, diagnose=False, filter_min=-np.inf, rank=None,
+    retained_variance_tol=0.999):
     """
     Calculate the chi2 between two arrays using a covariance matrix.
 
@@ -577,33 +592,40 @@ def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, 
         assert cov.shape[0] == cov.shape[1], f'Cov must be a square matrix: {cov.shape}'
         assert cov.shape[0] == len(pred), f'Cov must have the same number of rows as pred: {cov.shape[0]} != {len(pred)}'
         
+        #Diagnosis
+        eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(cov)
+        cutoff = pinv_rcond * max_eig
+        s = np.linalg.svd(cov,compute_uv=False)
+        mask = s > cutoff
+        retained_variance = np.sum(s[mask])/np.sum(s)
+        if retained_variance < retained_variance_tol:
+            raise Exception(f'Retained variance is less than {retained_variance_tol:.3f}: {retained_variance:.6e}')
         if rank is not None:
             cov = keep_top_eigenvalues_cov(cov, rank)
         if diagnose:
-            eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(cov)
             print(f'cov eigenvalues: min={min_eig:.6e} max={max_eig:.6e} cond={cond:.6e}')
             for i in range(len(eigvals)):
                 print(f'    eigvalue {i}: {eigvals[i]:.2e}')
                 #print(f'    eigvector {i}: {eigvecs[:,i]}')
             if pinv_rcond is not None:
-                cutoff = pinv_rcond * max_eig
                 n_dropped = np.sum(eigvals < cutoff)
                 print(f'  pinv_rcond={pinv_rcond} -> drop eig < {cutoff:.6e} ({n_dropped} modes)')
+
+                
+                print(f'  retained variance: {retained_variance:.6e}')
 
         if pinv_rcond is not None:
             inv_cov = np.linalg.pinv(cov, rcond=pinv_rcond)
         else:
-            try:
-                inv_cov = np.linalg.inv(cov)
-            except np.linalg.LinAlgError:
-                print('WARNING - Failed to invert covariance matrix, using pseudo-inverse')
-                inv_cov = np.linalg.pinv(cov, rcond=pinv_rcond/10.)
-        # print(f'inv_cov = {inv_cov}')
-        # print(f'inv_cov diagonal: {np.diag(inv_cov)}')
-        # print(f'diff**2 = {diff**2}')
-        # print(f'diff = {diff}')
-        # print(f'inv_cov @ diff**2 = {inv_cov @ diff**2}')
+            inv_cov = np.linalg.inv(cov)
         chi2_val = diff.T @ inv_cov @ diff
+        if diagnose:
+          print(f'inv_cov = {inv_cov}')
+          print(f'inv_cov diagonal: {np.diag(inv_cov)}')
+          print(f'diff**2 = {diff**2}')
+          print(f'diff = {diff}')
+          print(f'inv_cov @ diff**2 = {inv_cov @ diff**2}')
+          print(f'chi2_val = {chi2_val}')
         #print(f'chi2_vals = {chi2_vals}')
         #print(f'inv_cov = {inv_cov}')
         #print(f'diff = {diff}')

@@ -14,7 +14,7 @@ import copy
 import json
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from sbnd.numu.numu_constants import *
 
 class Systematics:
     """Class for handling systematic uncertainty processing and computation."""
@@ -28,6 +28,8 @@ class Systematics:
             'type': None,
             'name': None,
             'variation': None,
+            'label': None,
+            'description': '',
             'rank': None,
             'sigma_tilde': [],
             'sel': [],
@@ -50,7 +52,8 @@ class Systematics:
             'xsec_fracunc': None,
             'event_fracunc': None,
             'event_totalunc': None,
-            'xsec_totalunc': None
+            'xsec_totalunc': None,
+            'order': None
         }
     
     def __init__(self, variable_name, bins,
@@ -110,6 +113,7 @@ class Systematics:
         self._genweights_sel_background = np.array(genweights_sel_background)
         self._genweights_data = np.array(genweights_data) if genweights_data is not None else None
         self._data = np.array(data) if data is not None else None
+        self.xlabel = self._get_default_xlabel()
         # Conditional assertions
         if self._true_sig is not None:
             assert len(self._true_sig) == len(self._genweights_sig), f'True signal and generator weights have different lengths: {len(self._true_sig)} != {len(self._genweights_sig)}'
@@ -178,10 +182,11 @@ class Systematics:
             self.eff_truth = compute_efficiency(self.sig_truth, self.sel_truth)
         else:
             self.eff_truth = None
-        
+
         # Compute eff_reco (efficiency over reco distribution)
         if self.sig_truth is not None:
-            self.eff_reco = np.where(self.sig_truth > 0, self.sel / self.sig_truth, 0.0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                self.eff_reco = np.where(self.sig_truth > 0, self.sel / self.sig_truth, 0.0)
         else:
             self.eff_reco = None
         
@@ -211,6 +216,20 @@ class Systematics:
         # Initialize systematic results dictionary
         self.systematics = {}
         self._initialize_systematic_dicts()
+
+    def _get_default_xlabel(self):
+        """
+        Default reconstructed-axis label for this variable.
+        """
+        if self.variable_name == 'costheta':
+            return r'Reconstructed $\cos\theta_{\mu}$'
+        if self.variable_name == 'momentum':
+            return r'Reconstructed $p_{\mu}$ (GeV)'
+        if self.variable_name == 'differential':
+            return r'Reconstructed 2D Bin ID'
+        if self.variable_name == 'opt0':
+            return r'Reconstructed $1/Opt0$ Score'
+        return f'{self.variable_name}'
     
     def _initialize_systematic_dicts(self):
         """Initialize the systematic dictionaries with the template structure."""
@@ -226,6 +245,7 @@ class Systematics:
             self.systematics[key]['label'] = self.sys_dict[key].get('label', self.sys_dict[key]['name'])
             self.systematics[key]['description'] = self.sys_dict[key].get('description', '')
             self.systematics[key]['variation'] = self.sys_dict[key]['variation']
+            self.systematics[key]['order'] = self.sys_dict[key].get('order', None)
     def __repr__(self):
         return f'Systematics(variable={self.variable_name}, keys={list(self.sys_dict.keys())})'
     def get_sys_keydict(self,keys,pattern=None,stype='RW'):
@@ -256,20 +276,24 @@ class Systematics:
             key = key.replace('multisigma_', '')
             key = key.replace('multisim_', '')
             key = key.replace('nsigma_', '')
-            key = key.replace('GENIEReWeight_SBN_v1_', '')
-            key = key.replace('_Flux', '')
+            key = key.replace('GENIEReWeight_SBN_v1_','')
+            key = key.replace('GENIEReWeight_', '')
+            key = key.replace('_Flux', '_flux')
             key = key.replace('reinteractions_', '')
-            key = key.replace('_Geant4', '')
-            if key == 'slim':
-                key = 'g4'
+            key = key.replace('_Geant4', '_g4')
+            key = key.replace('SBNNuSyst_', '')
+            key = key.replace('MECq0q3InterpWeighting_', '')
+            key = key.replace('SuSAv2To', '')
+            key = key.replace('q0binned_', '')
+            key = key.replace('q0bin', '')
             return key
         def assign_type(key,stype='RW'):
             if stype == 'RW':
-                if 'genie' in key.lower():
+                if 'genie' in key.lower() or 'sbnnusyst' in key.lower() or 'susav2' in key.lower():
                     return 'xsec'
                 elif 'flux' in key.lower():
                     return 'flux'
-                elif 'geant4' in key.lower() or 'slim' in key.lower() or 'g4' in key.lower():
+                elif 'geant4' in key.lower():
                     return 'g4'
                 elif 'stat' in key.lower():
                     return 'stat'
@@ -353,6 +377,7 @@ class Systematics:
         else:
             iterator = self.systematics.items()
         keys_to_delete = []
+        #print(f'Processing ({list(self.systematics.keys())})')
         for key, sys_dict in iterator:
             cols = sys_dict['cols']
             col_names = sys_dict['col_names']
@@ -375,18 +400,28 @@ class Systematics:
                 if col not in mc_sel_signal_data.keys() or col not in mc_sel_background_data.keys() or col not in mc_signal_data.keys():
                     #print(f'WARNING: {col} not in mc_sel_signal_data or mc_sel_background_data')
                     continue
+                # Extract the reweighting factors (copy to avoid SettingWithCopyWarning when sanitizing)
+                rw_sel_signal = mc_sel_signal_data[col].copy()
+                rw_sel_background = mc_sel_background_data[col].copy()
+                rw_signal = mc_signal_data[col].copy()
+                #Convert inf or nan to 1
+                rw_sel_signal[(abs(rw_sel_signal) == np.inf) | (np.isnan(rw_sel_signal))] = 1
+                rw_sel_background[(abs(rw_sel_background) == np.inf) | (np.isnan(rw_sel_background))] = 1
+                rw_signal[(abs(rw_signal) == np.inf) | (np.isnan(rw_signal))] = 1
+                # Convert negative weights to 0
+                rw_sel_signal[rw_sel_signal < 0] = 0
+                rw_sel_background[rw_sel_background < 0] = 0
+                rw_signal[rw_signal < 0] = 0
                 # Selected reco histogram
                 _sel, _ = np.histogram(
                     self._reco_sel, bins=self.bins,
-                    weights=self._genweights_sel * mc_sel_signal_data[col]
+                    weights=self._genweights_sel * rw_sel_signal
                 )
                 
-                # Replace nan with 1 for the background data
-                mc_sel_background_data_col = np.nan_to_num(mc_sel_background_data[col],nan=1)
                 # Selected background reco histogram (no weights variation)
                 _sel_background, _ = np.histogram(
                     self._reco_sel_background, bins=self.bins,
-                    weights=self._genweights_sel_background * mc_sel_background_data_col
+                    weights=self._genweights_sel_background * rw_sel_background
                 )
                 
                 # Store sel results
@@ -399,13 +434,13 @@ class Systematics:
                     # Signal truth histogram
                     _sig_truth, _ = np.histogram(
                         self._true_sig, bins=self.bins,
-                        weights=self._genweights_sig * mc_signal_data[col]
+                        weights=self._genweights_sig * rw_signal
                     )
                     
                     # Selected truth histogram
                     _sel_truth, _ = np.histogram(
                         self._true_sel, bins=self.bins,
-                        weights=self._genweights_sel * mc_sel_signal_data[col]
+                        weights=self._genweights_sel * rw_sel_signal
                     )
                     
                     # Get the efficiency
@@ -414,7 +449,7 @@ class Systematics:
                     # Get the smearing matrix
                     _smearing = get_smear_matrix(
                         self._true_sel, self._reco_sel, self.bins,
-                        weights=self._genweights_sel * mc_sel_signal_data[col]
+                        weights=self._genweights_sel * rw_sel_signal
                     )
                     
                     # Use universe efficiency for GENIE xsec uncertainties, CV efficiency otherwise
@@ -582,6 +617,7 @@ class Systematics:
             sys_dict['label'] = sys_key
             sys_dict['description'] = ''
             sys_dict['variation'] = 'flat'
+            sys_dict['order'] = None
             self.systematics[sys_key] = sys_dict
         else:
             sys_dict = self.systematics[sys_key]
@@ -620,6 +656,7 @@ class Systematics:
             sys_dict['label'] = sys_key
             sys_dict['description'] = ''
             sys_dict['variation'] = 'stat'
+            sys_dict['order'] = None
             self.systematics[sys_key] = sys_dict
         else:
             sys_dict = self.systematics[sys_key]
@@ -635,7 +672,8 @@ class Systematics:
             sel_total = self.sel + self.sel_background
             # Poisson uncertainty is sqrt(N)
             sel_unc = np.sqrt(sel_total)
-            frac_unc = np.where(sel_total > 0, sel_unc / sel_total, 0)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                frac_unc = np.where(sel_total > 0, sel_unc / sel_total, 0)
             _sel_variation = sel_total + sign * sel_unc
             # Ensure non-negative
             _sel_variation = np.maximum(_sel_variation, 0)
@@ -649,7 +687,7 @@ class Systematics:
             else:
                 sys_dict['sigma_tilde'].append(None)
     
-    def compute_covariances(self, keys=None, check=True, do_correct_negative_eigenvalues=False, compute_xsec_cov=True, **kwargs):
+    def compute_covariances(self, keys=None, check=False, do_correct_negative_eigenvalues=False, compute_xsec_cov=True, **kwargs):
         """
         Compute covariance matrices, correlations, and uncertainties for each systematic.
 
@@ -917,18 +955,18 @@ class Systematics:
         Parameters
         ----------
         sys_type : str
-            The type of systematic (e.g., 'xsec', 'flux', 'g4', 'cosmic', 'det')
+            The type of systematic (e.g., 'xsec', 'flux', 'geant4', 'cosmic', 'det')
         
         Returns
         -------
         dict or None
             The CV source dictionary if found, None otherwise
         """
-        # If 'slim_syst' exists and this is a RW systematic (not detector), use slim CV
+        # If 'geant4_syst' exists and this is a RW systematic (not detector), use slim CV
         # If 'cosmic_data' exists and this is a cosmic systematic, use cosmic CV
         # Detector systematics are typically 'Det' type, while slim are 'RW' type
-        if 'slim_syst' in self.systematics and sys_type in ['xsec', 'flux', 'g4']:
-            return self.systematics['slim_syst']
+        if 'geant4_syst' in self.systematics and sys_type in ['xsec', 'flux', 'g4']:
+            return self.systematics['geant4_syst']
         elif 'cosmic_data' in self.systematics and sys_type == 'cosmic':
             return self.systematics['cosmic_data']
         elif 'det_data' in self.systematics and sys_type in ['pds','tpc','sce','calo']:
@@ -993,6 +1031,7 @@ class Systematics:
             self.systematics[sk]['label'] = sk
             self.systematics[sk]['description'] = ''
             self.systematics[sk]['variation'] = 'summary'
+            self.systematics[sk]['order'] = None
             
             # Initialize covariance matrices
             n_bins = len(self.bins) - 1
@@ -1077,60 +1116,93 @@ class Systematics:
                     xsec_cv, self.systematics[sk]['xsec_fracunc']
                 )
     
-    def add_description(self, description_dict):
+    def generate_description_template(self, save_dir=None, descriptions_path=None,
+                                       exclude_keys=None, include_keys=None,
+                                       key_order=None):
         """
-        Add labels and descriptions to systematics from a dictionary.
-        
-        Parameters
-        ----------
-        description_dict : dict
-            Dictionary with keys matching systematic keys. Each value should be
-            a dict with 'label' and/or 'description' keys.
-            
-        Raises
-        ------
-        KeyError
-            If a key in description_dict is not found in self.systematics
-        """
-        for key, desc_data in description_dict.items():
-            if key not in self.systematics:
-                raise KeyError(f"Key '{key}' not found in systematics dictionary. Available keys: {list(self.systematics.keys())}")
-            
-            if not isinstance(desc_data, dict):
-                raise TypeError(f'Value for key "{key}" must be a dictionary with "label" and/or "description" keys')
-            
-            if 'label' in desc_data:
-                self.systematics[key]['label'] = desc_data['label']
-            if 'description' in desc_data:
-                self.systematics[key]['description'] = desc_data['description']
-    
-    def generate_description_template(self, save_dir=None):
-        """
-        Generate a template dictionary for adding descriptions to systematics.
+        Generate a rich template dictionary for systematics with metadata.
         
         Parameters
         ----------
         save_dir : str, optional
-            Directory to save the template JSON file. If None, don't save.
+            Directory to save the template JSON file.
+        descriptions_path : str, optional
+            Path to a JSON file mapping systematic names to description strings.
+            Descriptions found in this file override any already stored on the object.
+        exclude_keys : list, optional
+            Keys to exclude from the template.
+        include_keys : list, optional
+            If provided, only include these keys.
+        key_order : list, optional
+            Ordered list of keys. Each key's ``order`` field is set to its
+            position in this list. Keys not in the list keep their default
+            order (appended after the explicit ones).
             
         Returns
         -------
         dict
-            Dictionary with keys matching systematic keys. Each value is a dict
-            with 'label' (set to current label/name) and 'description' (empty string).
+            Keyed by systematic key. Values are dicts with: name, variation,
+            description, event_rate_unc, xsec_unc, order.
         """
+        desc_lookup = {}
+        if descriptions_path is not None:
+            with open(descriptions_path, 'r') as f:
+                desc_lookup = json.load(f)
+
+        order_lookup = {}
+        if key_order is not None:
+            for i, k in enumerate(key_order):
+                order_lookup[k] = i
+
         template = {}
+        next_order = len(order_lookup)
+        seen_names = {}
         for key, sys_dict in self.systematics.items():
+            name = sys_dict.get('name', key)
+            seen_names.setdefault(name, []).append(key)
+
+        next_order = len(order_lookup)
+        for key, sys_dict in self.systematics.items():
+            if sys_dict.get('variation') in ('self', None):
+                continue
+            if exclude_keys and key in exclude_keys:
+                continue
+            if include_keys and key not in include_keys:
+                continue
+
+            name = sys_dict.get('name', key)
+            stype = sys_dict.get('type', '')
+            if len(seen_names.get(name, [])) > 1 and stype:
+                display_name = f'{name} ({stype})'
+            else:
+                display_name = name
+            description = desc_lookup.get(name, desc_lookup.get(key, sys_dict.get('description', '')))
+
+            event_unc = sys_dict.get('event_totalunc', None)
+            xsec_unc = sys_dict.get('xsec_totalunc', None)
+
+            if key in order_lookup:
+                order = order_lookup[key]
+            elif sys_dict.get('order') is not None:
+                order = sys_dict['order']
+            else:
+                order = next_order
+                next_order += 1
+
             template[key] = {
-                'label': sys_dict.get('label', sys_dict.get('name', key)),
-                'description': sys_dict.get('description', '')
+                'name': display_name,
+                'variation': sys_dict.get('variation', ''),
+                'description': description,
+                'event_rate_unc': float(event_unc) if event_unc is not None and not hasattr(event_unc, '__len__') else event_unc,
+                'xsec_unc': float(xsec_unc) if xsec_unc is not None and not hasattr(xsec_unc, '__len__') else xsec_unc,
+                'order': order,
             }
         
         if save_dir is not None:
             os.makedirs(save_dir, exist_ok=True)
             template_path = os.path.join(save_dir, 'description_template.json')
             with open(template_path, 'w') as f:
-                json.dump(template, f, indent=2)
+                json.dump(template, f, indent=2, default=str)
             print(f'Description template saved to {template_path}')
         
         return template
@@ -1164,6 +1236,10 @@ class Systematics:
         ax : matplotlib.axes.Axes
             The axes
         """
+        # Use a sensible default xlabel if caller did not provide one
+        if not xlabel:
+            xlabel = self.xlabel
+
         # Filter to valid keys for this plot only (do not mutate self.systematics)
         valid_keys = []
         for key, sys_dict in self.systematics.items():
@@ -1238,17 +1314,16 @@ class Systematics:
         else:
             ax.set_ylabel(r'Event Rate '+ylabel_type)
         if self.variable_name == 'momentum':
-            ax.set_xlim(0, 4)
+            ax.set_xlim(0, MAX_PMOM)
         if self.variable_name == 'opt0':
             ax.set_xscale('log')
 
-        ax.legend(ncol=int(np.ceil(max_uncs/24)), bbox_to_anchor=(1.05, 1.05))
         ax.set_xlabel(xlabel)
-
+        ax.legend(ncol=int(np.ceil(max_uncs/18)),loc='upper left',bbox_to_anchor=(1.02, 1.0))
         
         return [fig,ax,None]
     
-    def plot_all_covariance_matrices(self, plot_dir=None, save_plots=True, progress_bar=False):
+    def plot_all_covariance_matrices(self, plot_dir=None, save_plots=True, progress_bar=False, suffix='', keys=None, **kwargs):
         """
         Plot all covariance matrices.
         
@@ -1258,15 +1333,25 @@ class Systematics:
             Directory to save plots
         save_plots : bool
             Whether to save plots
+        keys : list, optional
+            List of keys to plot, if None plot all keys
         """
-        if progress_bar:
-            pbar = tqdm(self.systematics.items(), unit=' goomba')
+        if keys is None:
+            systematics_to_plot = self.systematics
         else:
-            pbar = self.systematics.items()
+            for key in keys:
+                if key not in self.systematics:
+                    raise ValueError(f"Systematic key '{key}' not found")
+            systematics_to_plot = {k: v for k, v in self.systematics.items() if k in keys}
+        if progress_bar:
+            pbar = tqdm(systematics_to_plot.items(), unit=' goomba')
+        else:
+            pbar = systematics_to_plot.items()
         for key, _ in pbar:
-            _ = self.plot_covariance_matrices(key, plot_dir, save_plots)
+            _ = self.plot_covariance_matrices(key, plot_dir, save_plots, suffix, **kwargs)
     
-    def plot_covariance_matrices(self, sys_key, plot_dir=None, save_plots=True):
+    def plot_covariance_matrices(self, sys_key, plot_dir=None, save_plots=True, suffix='', include_xsec_cov=True, 
+        include_event_cov=True, histtypes=None):
         """
         Plot covariance, fractional covariance, and correlation matrices.
         
@@ -1278,7 +1363,12 @@ class Systematics:
             Directory to save plots
         save_plots : bool
             Whether to save plots
-        
+        include_xsec_cov : bool, optional
+            Whether to include xsec covariance
+        include_event_cov : bool, optional
+            Whether to include event covariance
+        histtypes : list, optional
+            List of histogram types to plot, if None plot all types
         Returns
         -------
         figs : dict
@@ -1293,22 +1383,38 @@ class Systematics:
         hist2dkeys = [k for k in sys_dict.keys() if 'corr' in k or 'cov' in k]
         
         for plotkey in hist2dkeys:
-            if sys_dict[plotkey] is None:
+            #Condition to plot only certain histogram types
+            if histtypes is not None:
+                for histtype in histtypes:
+                    if histtype not in plotkey:
+                        continue
+            # Condition to plot the xsec or event covariance
+            if not include_xsec_cov and plotkey.startswith('xsec'):
+                continue
+            if not include_event_cov and plotkey.startswith('event'):
+                continue
+            hist2d = sys_dict[plotkey]
+
+            if hist2d is None:
                 continue
                 
-            if not isinstance(sys_dict[plotkey], np.ndarray):
+            if not isinstance(hist2d, np.ndarray):
                 print(f'WARNING: {plotkey} for {sys_key} / {self.variable_name} is not a numpy array, skipping...')
-                print(f'Type: {type(sys_dict[plotkey])}')
+                print(f'Type: {type(hist2d)}')
                 continue
-            if sys_dict[plotkey].ndim != 2 or 0 in sys_dict[plotkey].shape:
+            if hist2d.ndim != 2 or 0 in hist2d.shape:
                 print(f'WARNING: {plotkey} for {sys_key} / {self.variable_name} is not a 2D array, skipping...')
-                print(f'Shape: {sys_dict[plotkey].shape}')
+                print(f'Shape: {hist2d.shape}')
                 continue
 
+
             #Get hist2d, but replace Nan or Inf with 0
-            hist2d = np.nan_to_num(sys_dict[plotkey])
+            hist2d = np.nan_to_num(hist2d)
             hist2d = np.where(np.isinf(hist2d), 0, hist2d)
             hist2d = np.where(np.abs(hist2d) == np.finfo(np.double).max, 0, hist2d)
+            #Skip if all values are 0
+            if np.all(hist2d == 0):
+                continue
             # Compute valid vmin/vmax for colorbar to avoid NaN/Inf limits
             vmin = np.nanmin(hist2d)
             vmax = np.nanmax(hist2d)
@@ -1334,17 +1440,12 @@ class Systematics:
             else:
                 continue
             
+            if 'unaltered' in plotkey:
+                continue
+            
             # Determine variable and bins based on variable_name
-            set_axlims = False
-            if self.variable_name == 'costheta':
-                axlabel = r'Reconstructed $\cos\theta_{\mu}$'
-            elif self.variable_name == 'momentum':
-                axlabel = r'Reconstructed $p_{\mu}$ (GeV)'
-                set_axlims = True
-            elif self.variable_name == 'differential':
-                axlabel = r'Reconstructed 2D Bin ID'
-            else:
-                axlabel = f'Reconstructed {self.variable_name}'
+            set_axlims = self.variable_name == 'momentum'
+            axlabel = self.xlabel
             
             bins = self.bins
             
@@ -1363,12 +1464,12 @@ class Systematics:
             ax.set_ylabel(axlabel)
             fig.colorbar(im, ax=ax)
             if set_axlims:
-                ax.set_xlim(0, 4.)
-                ax.set_ylim(0, 4.)
+                ax.set_xlim(0, MAX_PMOM)
+                ax.set_ylim(0, MAX_PMOM)
             
             if save_plots:
                 if plot_dir is not None:
-                    plotters.save_plot(name, fig=fig, folder_name=f'{plot_dir}/{subfolder}')
+                    plotters.save_plot(fname=f'{name}{suffix}', fig=fig, folder_name=f'{plot_dir}/{subfolder}')
                 else:
                     raise ValueError('plot_dir is None and save_plots is True')
                 plt.close(fig)
@@ -1379,7 +1480,7 @@ class Systematics:
         
         return figs
     
-    def plot_all_distributions(self, keys=None, exclude_keys=[], include_keys=[], **kwargs):
+    def plot_all_distributions(self, keys=None, exclude_keys=[], include_keys=[], suffix='', **kwargs):
         """
         Plot all distributions for all systematics.
         """
@@ -1395,11 +1496,11 @@ class Systematics:
                 continue
             if self.systematics[sys_key].get('variation') == 'self':
                 continue
-            figs[sys_key] = self.plot_distributions(sys_key, **kwargs)
+            figs[sys_key] = self.plot_distributions(sys_key, suffix=suffix, **kwargs)
         return figs
     
     def plot_distributions(self, sys_key, plot_key='sel', plot_dir=None, save_plots=True,
-                           scale_by_xsec_unit=False):
+                           scale_by_xsec_unit=False, suffix=''):
         """
         Plot sigma_tilde or sel distributions for CV and all universe variations.
         
@@ -1432,25 +1533,16 @@ class Systematics:
         if plot_key not in sys_dict or sys_dict[plot_key] is None or len(sys_dict[plot_key]) == 0:
             return figs
         
-        set_xlim = False
+        set_xlim = self.variable_name == 'momentum'
         xscale = 'linear'
-        if self.variable_name == 'costheta':
-            axlabel = r'Reconstructed $\cos\theta_{\mu}$'
-        elif self.variable_name == 'momentum':
-            axlabel = r'Reconstructed $p_{\mu}$ (GeV)'
-            set_xlim = True
-        elif self.variable_name == 'differential':
-            axlabel = r'Reconstructed 2D Bin ID'
-        elif self.variable_name == 'opt0':
-            axlabel = r'Reconstructed $1/Opt0$ Score'
+        if self.variable_name == 'opt0':
             xscale = 'log'
-        else:
-            axlabel = f'{self.variable_name}'
+        axlabel = self.xlabel
         
         bins = self.bins
         # Check if sys_dict[plot_key] is a list (variations) or array (stored CV)
         # If it's a list, we need to determine which CV to use
-        # Check if there's a stored CV entry (like 'slim_syst' or 'cosmic_data') that might be the source
+        # Check if there's a stored CV entry (like 'geant4_syst' or 'cosmic_data') that might be the source
         # Get the correct CV for this systematic type
         hist_var = self._get_cv_for_type(sys_dict.get('type'), cv_key=plot_key)
         if hist_var is not None:
@@ -1508,11 +1600,11 @@ class Systematics:
         ax.set_ylabel(y_label)
         ax.set_title(title)
         if set_xlim:
-            ax.set_xlim(0, 4.)
+            ax.set_xlim(0, MAX_PMOM)
         ax.set_xscale(xscale)
         if save_plots:
             if plot_dir is not None:
-                plotters.save_plot(name, fig=fig, folder_name=plot_dir)
+                plotters.save_plot(fname=f'{name}{suffix}', fig=fig, folder_name=plot_dir)
             else:
                 raise ValueError('plot_dir is None and save_plots is True')
             plt.close(fig)
@@ -1645,15 +1737,20 @@ class Systematics:
                 'name': val['name'],
                 'label': val.get('label', val.get('name', key)),
                 'description': val.get('description', ''),
-                'variation': val['variation']
+                'variation': val['variation'],
+                'order': val.get('order', None)
             }
         with open(os.path.join(metadata_dir, 'sys_dict.json'), 'w') as f:
             json.dump(sys_dict_serializable, f, indent=2)
         
-        # Save systematics data
-        for key,sdict in self.systematics.items():
-            subfolder = sdict['name']
-            for k,arr_like in sdict.items():
+        # Save systematics data (folder per dict key, not name)
+        metadata_keys = {'name', 'type', 'variation', 'label', 'description',
+                         'order', 'cols', 'col_names', 'rank'}
+        for key, sdict in self.systematics.items():
+            subfolder = key
+            for k, arr_like in sdict.items():
+                if k in metadata_keys:
+                    continue
                 if k not in save_keys:
                     continue
                 if arr_like is None:
@@ -1699,7 +1796,8 @@ class Systematics:
                         
     @classmethod
     def from_saved(cls, load_dir, var_name, metadata_dir='metadata_detsys',
-                   ignore_keys=[], ignore_types=[], select_types=[], n_cpus=10):
+                   ignore_keys=[], ignore_types=[], select_types=[], ncpus=10,
+                   lite=True, use_legacy_names=False):
         """
         Create a Systematics object from saved data.
         This is the recommended way to load saved systematics.
@@ -1720,6 +1818,12 @@ class Systematics:
             List of types to ignore
         select_types : list, optional
             List of types to select
+        ncpus : int, optional
+            Number of CPUs to use for parallel processing
+        lite : bool, optional
+            If True, only load the metadata and necessary systematics data.
+        use_legacy_names : bool, optional
+            If True, match subfolders by their 'name' field (old save format).
         Returns
         -------
         Systematics
@@ -1806,11 +1910,12 @@ class Systematics:
                 'name': val['name'],
                 'label': val.get('label', val.get('name', key)),
                 'description': val.get('description', ''),
-                'variation': val['variation']
+                'variation': val['variation'],
+                'order': val.get('order', None)
             }
             return key, entry
 
-        max_workers = n_cpus if n_cpus is not None and n_cpus > 0 else None
+        max_workers = ncpus if ncpus is not None and ncpus > 0 else None
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             for result in executor.map(_process_sys_entry, items):
                 if result is None:
@@ -1853,11 +1958,14 @@ class Systematics:
         instance._initialize_systematic_dicts()
         
         # Now load the systematics data
-        instance.load(load_dir,ignore_keys=ignore_keys,ignore_types=ignore_types,select_types=select_types,metadata_dir=metadata_dir)
+        instance.load(load_dir, ignore_keys=ignore_keys, ignore_types=ignore_types,
+                      select_types=select_types, metadata_dir=metadata_dir, lite=lite,
+                      use_legacy_names=use_legacy_names)
         
         return instance
     
-    def load(self, load_dir,ignore_keys=[],ignore_types=[],select_types=[],metadata_dir='metadata_detsys'):
+    def load(self, load_dir, ignore_keys=[], ignore_types=[], select_types=[],
+             metadata_dir='metadata_detsys', lite=True, use_legacy_names=False):
         """
         Load the systematics from a directory
         Note: The systematics object must be initialized before loading.
@@ -1875,45 +1983,49 @@ class Systematics:
             List of types to select
         metadata_dir : str, optional
             Directory to load the metadata from
+        lite : bool, optional
+            If True, only load the metadata and necessary systematics data.
+        use_legacy_names : bool, optional
+            If True, match subfolders by their 'name' field (old save format
+            where folders were named by sdict['name']). Default False uses
+            the dict key directly.
         """
+        lite_drop_keys = ['sel','sigma_tilde','eff','cols','col_names','description']
         if not self.systematics:
             raise ValueError('Systematics object must be initialized before loading. Use Systematics.from_saved() instead.')
         
-        # Create a mapping from name to systematic key
-        name_to_key = {sdict['name']: key for key, sdict in self.systematics.items()}
-        
-        for subfolder in tqdm(os.listdir(load_dir),desc='Loading systematics',unit=' subfolder'):
+        name_to_key = {}
+        if use_legacy_names:
+            name_to_key = {sdict['name']: key for key, sdict in self.systematics.items()}
+
+        for subfolder in tqdm(os.listdir(load_dir), desc='Loading systematics', unit=' subfolder'):
             if subfolder in ignore_keys:
-            #print(f'Ignoring {subfolder} because it is in ignore_keys: {ignore_keys}')
                 continue
             subfolder_path = os.path.join(load_dir, subfolder)
             if not os.path.isdir(subfolder_path):
                 continue
-            
-            # Skip metadata directory
             if subfolder == metadata_dir:
                 continue
-            
-            
-            # Find the systematic key - try by name first, then by key directly
-            if subfolder in name_to_key:
+
+            if use_legacy_names and subfolder in name_to_key:
                 sys_key = name_to_key[subfolder]
             elif subfolder in self.systematics:
-                # For summary systematics where name == key
                 sys_key = subfolder
             else:
-                # Create it if it doesn't exist (e.g., summary systematics loaded via from_saved)
                 sys_key = subfolder
                 self.systematics[sys_key] = Systematics._get_dict_template().copy()
                 self.systematics[sys_key]['name'] = subfolder
                 self.systematics[sys_key]['label'] = subfolder
                 self.systematics[sys_key]['description'] = ''
+                self.systematics[sys_key]['order'] = None
             
 
             if self.systematics[sys_key]['type'] in ignore_types or (select_types != [] and self.systematics[sys_key]['type'] not in select_types):
                 self.systematics.pop(sys_key)
                 continue
             for file in os.listdir(subfolder_path):
+                if lite and any(key in file for key in lite_drop_keys):
+                    continue
                 file_path = os.path.join(subfolder_path, file)
                 if not os.path.isfile(file_path):
                     continue
