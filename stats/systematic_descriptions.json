@@ -1,4 +1,16 @@
 {
+  "total": "Total Systematic Uncertainty",
+  
+  "flux": "Total Flux Uncertainty",
+  "xsec": "Total Neutrino Interaction Uncertainty",
+  "g4": "Total Geant4 Uncertainty",
+  "stat": "Total Statistical Uncertainty",
+  "cosmic": "Cosmic ray background variation",
+  "calo": "Total Uncertainty from Calorimetric Parameters",
+  "pds": "Total PDS Uncertainty",
+  "tpc": "Total TPC Uncertainty",
+  "sce": "Total SCE Uncertainty",
+
   "RPACCQE": "Correction for CCQE RPA suppression",
   "CoulombCCQE": "CCQE Coulomb correction strength",
   "VecFFCCQEshape": "CCQE form factor shape",
@@ -73,17 +85,17 @@
   "CCQETemplateReweight_SF_3": "CCQE short-range correlation reweight to Spectral Function in $q_0$",
   "CCQETemplateReweight_SF_4": "CCQE short-range correlation reweight to Spectral Function in $q_0$",
   "CCQETemplateReweight_SF_5": "CCQE short-range correlation reweight to Spectral Function in $q_0$",
-  "CCQETemplateReweight_CRPA_1": "CCQE reweight to CRPA in $q_0$",
-  "CCQETemplateReweight_CRPA_2": "CCQE reweight to CRPA in $q_0$",
-  "CCQETemplateReweight_CRPA_3": "CCQE reweight to CRPA in $q_0$",
-  "CCQETemplateReweight_CRPA_4": "CCQE reweight to CRPA in $q_0$",
+  "CCQETemplateReweight_CRPA_1": "CCQE reweight to Continuous Random Phase Approximation in $q_0$",
+  "CCQETemplateReweight_CRPA_2": "CCQE reweight to Continuous Random Phase Approximation in $q_0$",
+  "CCQETemplateReweight_CRPA_3": "CCQE reweight to Continuous Random Phase Approximation in $q_0$",
+  "CCQETemplateReweight_CRPA_4": "CCQE reweight to Continuous Random Phase Approximation in $q_0$",
 
-  "QEInterference_INT_QEIntf_dial_0": "QE interference template dial 0",
-  "QEInterference_INT_QEIntf_dial_1": "QE interference template dial 1",
-  "QEInterference_INT_QEIntf_dial_2": "QE interference template dial 2",
-  "QEInterference_INT_QEIntf_dial_3": "QE interference template dial 3",
-  "QEInterference_INT_QEIntf_dial_4": "QE interference template dial 4",
-  "QEInterference_INT_QEIntf_dial_5": "QE interference template dial 5",
+  "QEInterference_INT_QEIntf_dial_0": "QE interference template dial",
+  "QEInterference_INT_QEIntf_dial_1": "QE interference template dial",
+  "QEInterference_INT_QEIntf_dial_2": "QE interference template dial",
+  "QEInterference_INT_QEIntf_dial_3": "QE interference template dial",
+  "QEInterference_INT_QEIntf_dial_4": "QE interference template dial",
+  "QEInterference_INT_QEIntf_dial_5": "QE interference template dial",
 
   "EDepFSI_VecFFCCQEshape": "CCQE form factor shape (energy-dependent FSI)",
   "EDepFSI_CoulombCCQE": "CCQE Coulomb correction (energy-dependent FSI)",
@@ -96,22 +108,21 @@
   "EDepFSI_FrAbs_pi": "FSI pion absorption (energy-dependent FSI)",
   "EDepFSI_FrPiProd_pi": "FSI pion production (energy-dependent FSI)",
 
-  "Valenica_MECResponse_0": "SuSAv2 $\\to$ Valencia MEC response $q_0$ bin 0",
-  "Valenica_MECResponse_1": "SuSAv2 $\\to$ Valencia MEC response $q_0$ bin 1",
-  "Valenica_MECResponse_2": "SuSAv2 $\\to$ Valencia MEC response $q_0$ bin 2",
-  "Valenica_MECResponse_3": "SuSAv2 $\\to$ Valencia MEC response $q_0$ bin 3",
-  "Martini_MECResponse_0": "SuSAv2 $\\to$ Martini MEC response $q_0$ bin 0",
-  "Martini_MECResponse_1": "SuSAv2 $\\to$ Martini MEC response $q_0$ bin 1",
-  "Martini_MECResponse_2": "SuSAv2 $\\to$ Martini MEC response $q_0$ bin 2",
-  "Martini_MECResponse_3": "SuSAv2 $\\to$ Martini MEC response $q_0$ bin 3",
+  "Valenica_MECResponse_0": "SuSAv2 $\\to$ Valencia MEC response in $q_0$",
+  "Valenica_MECResponse_1": "SuSAv2 $\\to$ Valencia MEC response in $q_0$",
+  "Valenica_MECResponse_2": "SuSAv2 $\\to$ Valencia MEC response in $q_0$",
+  "Valenica_MECResponse_3": "SuSAv2 $\\to$ Valencia MEC response in $q_0$",
+  "Martini_MECResponse_0": "SuSAv2 $\\to$ Martini MEC response in $q_0$",
+  "Martini_MECResponse_1": "SuSAv2 $\\to$ Martini MEC response in $q_0$",
+  "Martini_MECResponse_2": "SuSAv2 $\\to$ Martini MEC response in $q_0$",
+  "Martini_MECResponse_3": "SuSAv2 $\\to$ Martini MEC response in $q_0$",
 
-  "RPA_CCQE": "RPA correction for CCQE",
+  "RPA_CCQE": "Random Phase Approximation correction for CCQE",
 
   "proton": "Geant4 proton reinteraction",
   "piplus (g4)": "Geant4 $\\pi^+$ reinteraction",
   "piminus (g4)": "Geant4 $\\pi^-$ reinteraction",
 
-  "stat": "MC statistical uncertainty",
   "pot": "POT normalization uncertainty",
   "nt": "Number of targets uncertainty",
 
@@ -129,15 +140,6 @@
   "beta_90p1": "Recombination parameter $\\beta_{90}$ $+1\\sigma$",
   "R_embp1": "Recombination parameter $R$ $+1\\sigma$",
   "c_cal_fracp1": "Calorimetric Gain $+1\\sigma$",
-  "c_cal_fracm1": "Calorimetric Gain $-1\\sigma$",
-  "cosmic": "Cosmic ray background variation",
+  "c_cal_fracm1": "Calorimetric Gain $-1\\sigma$"
 
-  "total": "Total systematic uncertainty",
-  "flux": "Total flux uncertainty",
-  "xsec": "Total cross section model uncertainty",
-  "g4": "Total Geant4 reinteraction uncertainty",
-  "calo": "Total calorimetry uncertainty",
-  "pds": "Total photon detection system uncertainty",
-  "tpc": "Total TPC response uncertainty",
-  "sce": "Total space charge effect uncertainty"
 }

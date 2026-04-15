@@ -1,5 +1,7 @@
 import numpy as np
 from scipy.stats import chi2
+from scipy.optimize import brentq
+from sklearn.covariance import shrunk_covariance
 
 def construct_covariance(cv_evts, var_evts, scale_cov=1., rank=None, do_correct_negative_eigenvalues=False, assert_cov=True, apply_shrinkage=False):
   """
@@ -58,7 +60,8 @@ def construct_covariance(cv_evts, var_evts, scale_cov=1., rank=None, do_correct_
 
   diff = vars_stack - cv
   denom = cv
-  diff_fractional = diff / denom
+  with np.errstate(divide='ignore', invalid='ignore'):
+    diff_fractional = diff / denom
 
   # print(f'diff: {diff}')
   # print(f'diff.shape: {diff.shape}')
@@ -132,8 +135,15 @@ def covariance_from_fraccov(fraccov, cv):
     Absolute covariance on the given mean scale
   """
   cv = np.asarray(cv, dtype=float)
-  fraccov = np.nan_to_num(np.asarray(fraccov, dtype=float), nan=0.0, posinf=0.0, neginf=0.0)
   return fraccov * np.outer(cv, cv)
+
+def fraccov_from_covariance(covariance, cv):
+  """
+  Convert an absolute covariance to a fractional covariance for a given mean.
+  """
+  cv = np.asarray(cv, dtype=float)
+  covariance = np.asarray(covariance, dtype=float)
+  return covariance / np.outer(cv, cv)
 
 def construct_correlation_matrix(covariance_matrix):
   """
@@ -515,15 +525,74 @@ def correct_negative_eigenvalues(cov, scale_from_max=0., max_iter=1000, tol=0.):
         cov_corrected = (eigvecs * eigvals) @ eigvecs.T
     return cov_corrected, iters
 
+def tikhonov_regularize_cov(cov, retained_variance_tol=0.999, diagnose=False):
+    """
+    Tikhonov (ridge) regularization of a covariance matrix using sklearn's
+    shrunk_covariance. Finds the shrinkage parameter s analytically such that
+    the relative Frobenius change equals 1 - retained_variance_tol.
+
+    Regularized matrix:
+        cov_reg = (1-s)*cov + s*(trace(cov)/n)*I
+
+    Retained variance (relative Frobenius norm of the change):
+        retained(s) = 1 - s^2 * Var(lambda) / E[lambda^2]
+
+    where Var(lambda) and E[lambda^2] are over the eigenvalues of cov.
+    At s=0, retained=1. As s increases, retained decreases monotonically.
+    Solving for s given retained_variance_tol:
+        s_opt = sqrt((1 - retained_variance_tol) * E[lambda^2] / Var(lambda))
+    clamped to [0, 1).
+
+    Parameters
+    ----------
+    cov : ndarray, shape (n, n)
+    retained_variance_tol : float
+        Minimum retained variance (0 < tol < 1).  Higher = less regularization.
+    diagnose : bool
+        If True, print s_opt, condition numbers, and per-mode eigenvalue shifts.
+
+    Returns
+    -------
+    cov_reg : ndarray
+        Regularized covariance matrix.
+    s_opt : float
+        Shrinkage parameter used.
+    """
+    cov = np.asarray(cov, dtype=float)
+    eigvals, _, _, _, _ = _cov_eigenvalue_diagnostics(cov)
+    mu = np.mean(eigvals)
+
+    var_lam = np.var(eigvals)
+    e_lam2  = np.mean(eigvals ** 2)
+
+    if var_lam == 0 or e_lam2 == 0:
+        # Already scaled identity; no regularization needed.
+        return cov.copy(), 0.0
+
+    s_opt = np.sqrt((1.0 - retained_variance_tol) * e_lam2 / var_lam)
+    s_opt = float(np.clip(s_opt, 0.0, 1.0 - 1e-10))
+
+    cov_reg = shrunk_covariance(cov, shrinkage=s_opt)
+
+    if diagnose:
+        lam_reg = (1.0 - s_opt) * eigvals + s_opt * mu
+        retained = 1.0 - s_opt ** 2 * var_lam / e_lam2
+        _, _, cond_before, _, _ = _cov_eigenvalue_diagnostics(cov)
+        _, _, cond_after,  _, _ = _cov_eigenvalue_diagnostics(cov_reg)
+        print(f'Tikhonov regularization: s_opt={s_opt:.6e}')
+        print(f'  condition number: {cond_before:.3e} -> {cond_after:.3e}')
+        print(f'  retained variance: {retained:.6f} (target={retained_variance_tol})')
+        print('  mode  eigval_orig   eigval_reg')
+        for i, (lo, lr) in enumerate(zip(eigvals, lam_reg)):
+            print(f'  {i:>4d}  {lo:.3e}    {lr:.3e}')
+
+    return cov_reg, s_opt
+
+
 def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, diagnose=False, filter_min=-np.inf, rank=None,
-    retained_variance_tol=0.999):
+    retained_variance_tol=0.9999,mask_bins=None):
     """
     Calculate the chi2 between two arrays using a covariance matrix.
-
-    If full-cov chi2 is huge (e.g. 100k) while diagonal chi2 is modest (e.g. 90), the
-    covariance is ill-conditioned: tiny eigenvalues become huge in inv(cov) and amplify
-    residual components in those directions. Use pinv_rcond to regularize (pseudo-inverse
-    zeros out modes with eigenvalue < rcond * max_eigenvalue).
 
     Parameters
     ----------
@@ -549,7 +618,8 @@ def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, 
         Filter bins with pred or true values less than filter_min.
     rank : int, optional
         Rank of the covariance matrix. If None, use the full rank.
-
+    mask_bins : array_like, optional
+        Indices of bins to include in the chi2 calculation. If None, use all bins.
     Returns
     -------
     chi2 : float
@@ -567,8 +637,12 @@ def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, 
     
     # Filter bins with pred or true values less than filter_min
     valid = (pred >= filter_min) & (true >= filter_min)
+    if mask_bins is not None:
+      valid = valid & ~np.isin(np.arange(len(pred)), mask_bins)
     pred = pred[valid]
     true = true[valid]
+    if diagnose:
+      print(f'- Dropping {len(valid)-valid.sum()} bins with pred or true values less than {filter_min}')
     
     diff = true - pred
     dof = len(pred) - 1

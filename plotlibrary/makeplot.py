@@ -14,7 +14,7 @@ from sbnd.stats import stats
 from sbnd.general import plotters
 from sbnd.general import utils
 def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
-                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ax=None,fig=None,cov=None,**kwargs):
+                ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ax=None,fig=None,cov=None,data_label=None,**kwargs):
     """
     Create a histogram from a list of series each corresponding
     to a different true event type. Data series is optional.
@@ -25,8 +25,11 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         List of series, each corresponding to a different true event type.
     labels : list of str
         List of labels, each corresponding to a different true event type.
-    dens : bool
-        If True, the histogram is normalized to a density.
+        dens : bool or str
+        If True, the histogram is normalized to a density (matplotlib ``density``).
+        If ``'stackfrac'``, stacked bars are normalized so the sum over components
+        in each bin equals 1 (fractional breakdown per bin). Data overlay, statistical
+        hatch band, and external ``yerr`` are ignored in that mode. ``False`` for raw counts.
     yerr : list of float, optional
         yerr on MC event count. Will be a hatched bar centered on the MC event count.
     frac_yerr : bool, optional
@@ -85,7 +88,8 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
     if len(series) == 0:
         print(f'No events in series'+'\n'+f'xlabel: {xlabel}'+'\n'+f'cut: {cut}'+'\n'+f'savename: {savename}')
         return None,None,None if not return_counts else None,None
-    if dens:
+    stackfrac = dens == 'stackfrac'
+    if dens is True:
         histtype = 'step'
         alpha = 0.9
     else:
@@ -98,40 +102,34 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
       _max = np.max(_maxs)
       bins = np.linspace(_min,_max,bins+1)
     fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,colors=colors,weights=weights,return_counts=True
-                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=dens,show_counts=show_counts,show_pcts=show_pcts,ax=ax,fig=fig,filter_nan=True,**kwargs)
-    if yerr is not None:
+                   ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=(dens is True),stack_fraction=stackfrac,show_counts=show_counts,show_pcts=show_pcts,ax=ax,fig=fig,filter_nan=True,**kwargs)
+    if stackfrac:
+        yerr_arr = None
+    elif yerr is not None:
         yerr_arr = np.asarray(yerr) 
         if frac_yerr:
           yerr_arr = yerr_arr * n_perbin
         if len(yerr_arr) != len(bins) - 1:
             raise ValueError('yerr must have the same length as the histogram bins')
-        #ax.errorbar(bin_centers,n_perbin,yerr=yerr_arr,fmt='o',color='black')
     else:
       yerr_arr = np.sqrt(n_perbin)
-    if data_series is not None:
+    if data_series is not None and not stackfrac:
         #Group data by binning, get mean and std of data series
         if bin_centers is None:
           bin_centers = (bins[:-1] + bins[1:]) / 2
         data_counts = data_series.groupby(pd.cut(data_series,bins=bins)).count()
         data_stds = np.sqrt(data_counts)
-        if dens:
+        if dens is True:
             data_counts = data_counts * (dens_norm/len(data_series))
             data_stds = data_stds * (dens_norm/len(data_series))
-        if not dens and scale_data:
+        if dens is not True and scale_data:
             data_counts = data_counts * (np.sum(counts)/len(data_series))
             data_stds = data_stds * (np.sum(counts)/len(data_series))
-        if show_counts:
+        if data_label is not None:
+          data_events_label = data_label
+        elif show_counts:
           data_events_label = f'Data ({utils.format_number_with_suffix(data_counts.sum())})'
           if cov is not None or yerr is not None:
-            #print(f'pred: {n_perbin}')
-            #print(f'true: {data_counts.values}')
-            #print(f'cov: {cov}')
-            # if cov is not None:
-            #   #print(f'diagonal cov: {np.diag(np.sqrt(cov))}')
-            #   print(f'cov: {cov}')
-            # else:
-            #   print(f'unc (no cov): {yerr_arr}')
-            # Get chi2 and p-value
             if cov is not None:
               chi2, dof, pval = stats.calc_chi2(n_perbin, data_counts, cov,filter_min=1.)
             elif yerr is not None:
@@ -141,43 +139,27 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         else:
           data_events_label = None
         ax.errorbar(bin_centers,data_counts,yerr=data_stds,fmt='o',color='black',label=data_events_label)
-    #Hatches
-    ax.bar(
-        (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
-        2 * yerr_arr,
-        bottom=n_perbin - yerr_arr,
-        align='center',
-        width=np.diff(bins),
-        facecolor='none',
-        edgecolor='gray',
-        alpha=1.,
-        linewidth=0.,
-        hatch='xxx',
-        label=yerr_label
-    )
-    #Fill
-    ax.bar(
-        (bins[:-1] + bins[1:])/2, #Don't use bin_centers due to width iisue
-        2 * yerr_arr,
-        bottom=n_perbin - yerr_arr,
-        align='center',
-        width=np.diff(bins),
-        facecolor='gray',
-        edgecolor='none',
-        alpha=0.2,
-        linewidth=0.,
-    )
+    if not stackfrac:
+        plot_hist_with_uncertainty(bins=bins,n_perbin=n_perbin,yerr_arr=yerr_arr,yerr_label=yerr_label,ax=ax)
 
-    if dens: ax.set_ylabel('Density')
-    else: ax.set_ylabel('Candidates')
-    y_lim = ax.get_ylim()
-    if y_lim[1] > 1e6: #this means scientific notation kicks on, so we need to shift the label
-      label_y_shift = 0.06
+    if dens is True:
+        ax.set_ylabel('Density')
+    elif stackfrac:
+        ax.set_ylabel('Fraction')
     else:
-      label_y_shift = 0
-    ax.set_ylim(0,y_lim[1])
+        ax.set_ylabel('Candidates')
+    if stackfrac:
+        ax.set_ylim(0, 1.05)
+        label_y_shift = 0
+    else:
+        y_lim = ax.get_ylim()
+        if y_lim[1] > 1e6: #this means scientific notation kicks on, so we need to shift the label
+          label_y_shift = 0.06
+        else:
+          label_y_shift = 0
+        ax.set_ylim(0,y_lim[1])
     #Add labels
-    plotters.add_label(ax,pot_label,where='toprightoutside',color='black',alpha=1.,fontsize=12)
+    plotters.add_label(ax,pot_label,where='toprightoutside',color='gray',alpha=1.,fontsize=12)
     plotters.add_label(ax,label,where=(0.01,1.07+label_y_shift) if '\n' not in label else (0.01,1.15+label_y_shift)
       ,color='gray',alpha=0.9,fontsize=10,horizontalalignment='left',verticalalignment='top')
     plotters.add_label(ax,stat_label,where='bottomrightoutside',fontsize=10)
@@ -198,6 +180,341 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
     else:
       return fig,ax
     return fig,ax
+
+def plot_hist_with_uncertainty(bins,n_perbin,yerr_arr,yerr_label='Stat',ax=None,band_color='gray',hatch='xxx'):
+  """
+  Draw hatched uncertainty band around histogram counts.
+  """
+  if ax is None:
+    ax = plt.gca()
+  centers = (bins[:-1] + bins[1:]) / 2
+  ax.bar(
+      centers,
+      2 * yerr_arr,
+      bottom=n_perbin - yerr_arr,
+      align='center',
+      width=np.diff(bins),
+      facecolor='none',
+      edgecolor='gray',
+      alpha=1.,
+      linewidth=0.,
+      hatch=hatch,
+      label=yerr_label
+  )
+  ax.bar(
+      centers,
+      2 * yerr_arr,
+      bottom=n_perbin - yerr_arr,
+      align='center',
+      width=np.diff(bins),
+      facecolor=band_color,
+      edgecolor='none',
+      alpha=0.2,
+      linewidth=0.,
+  )
+  return ax
+
+def create_differential_stack(
+    series_ids,
+    labels,
+    binning2d=None,
+    diff_costheta_bins=None,
+    diff_momentum_bins_2d=None,
+    data_ids=None,
+    weights=None,
+    frac_unc=None,   # 1D, per global differential bin ID
+    cov=None,        # 2D, (n_bins, n_bins) covariance over all differential bins
+    xlabel='',
+    ylabel='Candidates',
+    panel_label_prefix='',
+    fig=None,
+    axs=None,
+    legend=True,
+    pot_label='',
+    label='',
+    savename='',
+    plot_dir=None,
+    close=True,
+    **kwargs,
+):
+  """
+  Create a grid of stacked histograms for a 2D binning.
+
+  Parameters
+  ----------
+  series_ids : list of array-like
+      Each entry contains 2D bin IDs (differential bin centers) for one MC component.
+  labels : list of str
+      Labels for each MC component, same order as series_ids.
+  binning2d : Binning2D, optional
+      Existing Binning2D instance. If None, diff_costheta_bins and diff_momentum_bins_2d
+      are used to construct one.
+  diff_costheta_bins : array-like, optional
+      Costheta bin edges. Used only if binning2d is None.
+  diff_momentum_bins_2d : array-like, optional
+      Momentum bin edges per costheta bin. Used only if binning2d is None.
+  data_ids : array-like, optional
+      2D bin IDs for data.
+  weights : list of array-like, optional
+      Per-component weights aligned with series_ids.
+  frac_unc : array-like, optional
+      Fractional systematic uncertainty per global differential bin ID.
+      frac_unc[bid] is the fractional unc. of differential bin with ID == bid.
+  cov : np.ndarray, optional
+      Full covariance matrix over all global differential bins, shape (n_bins, n_bins).
+  **kwargs
+      Passed to ``create_hist``. Use ``dens='stackfrac'`` for per-bin composition (no data overlay,
+      no ``frac_unc`` hatch, y axis 0 to 1).
+  """
+
+  if binning2d is None:
+    from sbnd.cafclasses.binning import Binning2D
+    binning2d = Binning2D(
+        diff_costheta_bins=diff_costheta_bins,
+        diff_momentum_bins_2d=diff_momentum_bins_2d,
+    )
+
+  # Map 2D bin ID to costheta bin and momentum center
+  id_to_ctbin = {}
+  id_to_pcenter = {}
+  for bid, d in binning2d.differential_dicts.items():
+    if bid < 0:
+      continue
+    id_to_ctbin[bid] = d['costheta_bin']
+    id_to_pcenter[bid] = d['momentum_center']
+
+  n_ct_bins = binning2d.n_costheta_bins
+
+  # Global differential-bin indexing for syst / covariance.
+  if cov is not None:
+    n_bins = cov.shape[0]
+  elif frac_unc is not None:
+    n_bins = len(frac_unc)
+  else:
+    n_bins = None
+
+  mc_counts = None
+  data_counts = None
+  if n_bins is not None:
+    mc_counts = np.zeros(n_bins, dtype=float)
+    data_counts = np.zeros(n_bins, dtype=float)
+
+  # Normalize series_ids and weights to lists
+  series_list = series_ids if isinstance(series_ids, (list, tuple)) else [series_ids]
+  if weights is not None and not isinstance(weights, (list, tuple)):
+    weights = [weights]
+
+  # Global component totals for legend
+  comp_totals = np.zeros(len(series_list), dtype=float)
+
+  # Build global MC counts (per diff bin and per component)
+  for comp_idx, s_ids in enumerate(series_list):
+    s_ids_arr = np.asarray(s_ids)
+    if weights is not None:
+      w_arr = np.asarray(weights[comp_idx])
+    else:
+      w_arr = np.ones_like(s_ids_arr, dtype=float)
+
+    comp_totals[comp_idx] += w_arr.sum()
+
+    if n_bins is not None:
+      for bid, wgt in zip(s_ids_arr, w_arr):
+        if bid < 0 or bid >= n_bins:
+          continue
+        mc_counts[int(bid)] += wgt
+
+  # Global data counts in diff-bin space
+  if n_bins is not None and data_ids is not None:
+    data_ids_arr = np.asarray(data_ids)
+    for bid in data_ids_arr:
+      if bid < 0 or bid >= n_bins:
+        continue
+      data_counts[int(bid)] += 1.0
+
+  chi2_str = None
+  # Global chi2 using full covariance, if provided
+  if cov is not None and data_ids is not None:
+    chi2, dof, pval = stats.calc_chi2(
+        mc_counts,
+        data_counts,
+        cov,
+        filter_min=1.,
+    )
+    chi2_str = utils.get_chi2_dof_pval_str(chi2, dof, pval)
+
+  # Global data legend label (so it shows up even when show_counts=False)
+  if data_ids is not None:
+    data_total = utils.format_number_with_suffix(len(data_ids))
+    if chi2_str is not None:
+      data_label = f'Data ({data_total})\n({chi2_str})'
+    else:
+      data_label = f'Data ({data_total})'
+  else:
+    data_label = None
+
+  # Build legend labels from global component totals
+  total_mc = comp_totals.sum()
+  if total_mc > 0:
+    legend_labels = [
+        f'{lab} ({utils.format_number_with_suffix(comp_totals[i])}, {100*comp_totals[i]/total_mc:.1f}%)'
+        for i, lab in enumerate(labels)
+    ]
+  else:
+    legend_labels = labels
+
+  # Figure / axes setup
+  if fig is None and axs is None:
+    ncols = 3
+    nrows = int(np.ceil(n_ct_bins / ncols))
+    fig, axs = plt.subplots(figsize=(12, 8), nrows=nrows, ncols=ncols)
+  if not isinstance(axs, np.ndarray):
+    axs = np.array([axs])
+  axs_flat = axs.flatten()
+  assert len(axs_flat) >= n_ct_bins, 'Not enough axes for costheta bins'
+
+  def _ids_to_pmom(ids_series):
+    s = pd.Series(ids_series)
+    pmom = s.map(id_to_pcenter)
+    return pmom.dropna()
+
+  data_ids_series = pd.Series(data_ids) if data_ids is not None else None
+  _stackfrac = kwargs.get('dens') == 'stackfrac'
+
+  for ct_idx in range(n_ct_bins):
+    ax = axs_flat[ct_idx]
+    panel_series = []
+    panel_weights = [] if weights is not None else None
+
+    # Slice each MC component by this costheta bin
+    for comp_idx, s_ids in enumerate(series_list):
+      s_ids_ser = pd.Series(s_ids)
+      m = s_ids_ser.map(id_to_ctbin) == ct_idx
+      panel_series.append(_ids_to_pmom(s_ids_ser[m]))
+      if weights is not None:
+        w_ser = pd.Series(weights[comp_idx])
+        panel_weights.append(w_ser[m])
+
+    # Slice data by this costheta bin
+    if data_ids_series is not None:
+      mdata = data_ids_series.map(id_to_ctbin) == ct_idx
+      data_pmom = _ids_to_pmom(data_ids_series[mdata])
+    else:
+      data_pmom = None
+
+    bins = binning2d.diff_momentum_bins_2d[ct_idx]
+
+    ct_lo = binning2d.diff_costheta_bins[ct_idx]
+    ct_hi = binning2d.diff_costheta_bins[ct_idx + 1]
+    panel_label = f'{panel_label_prefix}{ct_lo:.2f} <' + r'$\cos\theta_\mu$' + f' < {ct_hi:.2f}'
+
+    # Draw stacked histogram for this panel and get per-bin MC counts
+    _, ax, n_perbin = create_hist(
+        panel_series,
+        legend_labels,
+        data_series=(None if _stackfrac else data_pmom),
+        data_label=(None if _stackfrac else data_label),
+        weights=panel_weights,
+        bins=bins,
+        ax=ax,
+        fig=fig,
+        legend=legend and ct_idx == 2,
+        return_counts=True,
+        show_counts=False,
+        show_pcts=False,
+        **kwargs,
+    )
+    # Turn off per-panel y label; we use a shared one later
+    ax.set_ylabel('')
+
+    #Add label for costheta range
+    plotters.add_label(ax,panel_label,where='centerright',fontsize=10,color='black',alpha=0.9)
+
+    if _stackfrac:
+      ax.set_ylim(0, 1.05)
+    else:
+      # Optional per-panel systematic band (count space)
+      syst_yerr = None
+      if frac_unc is not None and n_bins is not None:
+        panel_bins = []
+        for bid, d in binning2d.differential_dicts.items():
+          if bid < 0:
+            continue
+          if d['costheta_bin'] != ct_idx:
+            continue
+          panel_bins.append((d['momentum_bin'], int(bid)))
+        panel_bins.sort(key=lambda x: x[0])
+        panel_ids = [bid for _, bid in panel_bins]
+        if len(panel_ids) == len(n_perbin):
+          panel_frac = np.array([frac_unc[i] for i in panel_ids])
+          syst_yerr = panel_frac * n_perbin
+          plot_hist_with_uncertainty(
+              bins=bins,
+              n_perbin=n_perbin,
+              yerr_arr=syst_yerr,
+              yerr_label='Syst',
+              ax=ax,
+              band_color='gray',
+              hatch='xxx',
+          )
+      stat_yerr = np.sqrt(n_perbin)
+      total_mc_yerr = stat_yerr if syst_yerr is None else np.sqrt(stat_yerr**2 + syst_yerr**2)
+      ymax = float(np.nanmax(n_perbin + total_mc_yerr)) if len(n_perbin) else 0.0
+      if data_pmom is not None and len(data_pmom) > 0:
+        dcounts, _ = np.histogram(np.asarray(data_pmom), bins=bins)
+        derr = np.sqrt(dcounts)
+        ymax = np.nanmax([ymax, float(np.nanmax(dcounts + derr)) if len(dcounts) else 0.0])
+      if (ymax > 0) and np.isfinite(ymax):
+        ax.set_ylim(0, ymax * 1.1)
+
+  # Determine global y scale across panels and switch to scientific notation
+  # for all panels if any has large counts.
+  from matplotlib.ticker import ScalarFormatter
+  max_y = 0
+  for _ax in axs_flat[:n_ct_bins]:
+    y0, y1 = _ax.get_ylim()
+    if y1 > max_y:
+      max_y = y1
+  if max_y >= 1e3:
+    fmt = ScalarFormatter(useMathText=True)
+    fmt.set_scientific(True)
+    fmt.set_powerlimits((3, 3))
+    for _ax in axs_flat[:n_ct_bins]:
+      _ax.yaxis.set_major_formatter(fmt)
+
+  # Shared labels and plot-level labels
+  # (assumes 3x3 layout; matches your earlier convention)
+  axs[2, 1].set_xlabel(xlabel)
+  axs[1, 0].set_ylabel(ylabel)
+  plotters.add_label(
+      axs[0, 2],
+      pot_label,
+      where=(0.99, 1.09),
+      color='gray',
+      alpha=1.,
+      fontsize=12,
+      horizontalalignment='right',
+      verticalalignment='top',
+  )
+  plotters.add_label(
+      axs[0, 0],
+      label,
+      where=(0.5, 1.09) if '\n' not in label else (0.01, 1.17),
+      color='gray',
+      alpha=0.9,
+      fontsize=10,
+      horizontalalignment='right',
+      verticalalignment='top',
+  )
+
+  #Save plot
+  if savename != '':
+    if plot_dir is None:
+      raise ValueError('plot_dir is None')
+    plotters.save_plot(f'{savename}',fig=fig,folder_name=plot_dir)
+    if close:
+      plt.close('all')
+
+  return fig, axs
 
 def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=None,cut='',savename=''
                 ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ylim=None,cov=None,show_cov=False,**kwargs):
@@ -353,9 +670,13 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
   
 
 def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weights=None,return_counts=False,
-              show_counts=True,show_pcts=True,ax=None,fig=None,filter_nan=False,filter_outofrange=False,bins=None,**pltkwargs):
+              show_counts=True,show_pcts=True,ax=None,fig=None,filter_nan=False,filter_outofrange=False,bins=None,
+              stack_fraction=False,**pltkwargs):
   """
   series is a list of pd.Series
+
+  If stack_fraction is True, draws a stacked bar chart where each bin sums to 1 over components
+  (per-bin composition). ``pltkwargs`` ``density`` and ``histtype`` are ignored for that path.
   """
   if fig is None and ax is None:
     fig,ax = plt.subplots(figsize=(7,4))
@@ -392,8 +713,38 @@ def plot_hist(series,labels,xlabel='',title=None,cmap='viridis',colors=None,weig
     colors = [tuple(color) for color in colors]
   #edgecolors = [plotters.darken_color(c,factor=0.5) for c in colors]
   #for s, c, e, w, l in zip(series, colors, edgecolors, weights, legend_labels):
-  n, bins, patches = ax.hist(series, label=legend_labels, color=colors, weights=weights, bins=bins, **pltkwargs)
-  n = [_n[-1] for _n in n.T] # Convert to list of last elements of each bin, which is the total number of events in each bin
+  if stack_fraction:
+    pltkwargs = dict(pltkwargs)
+    pltkwargs.pop('density', None)
+    pltkwargs.pop('histtype', None)
+    alpha_bar = pltkwargs.pop('alpha', 0.8)
+    n_bins = len(bins) - 1
+    n_series = len(series)
+    H = np.zeros((n_bins, n_series), dtype=float)
+    for i, s in enumerate(series):
+      w = weights[i] if weights is not None else None
+      h, _ = np.histogram(np.asarray(s), bins=bins, weights=w)
+      H[:, i] = h
+    total = H.sum(axis=1, keepdims=True)
+    F = np.divide(H, total, out=np.zeros_like(H, dtype=float), where=total > 0)
+    width = np.diff(bins)
+    x = bins[:-1] + 0.5 * width
+    bottom = np.zeros(n_bins)
+    for i in range(n_series):
+      ax.bar(
+          x,
+          F[:, i],
+          width=width,
+          bottom=bottom,
+          label=legend_labels[i],
+          color=colors[i],
+          alpha=alpha_bar,
+      )
+      bottom = bottom + F[:, i]
+    n = total.ravel()
+  else:
+    n, bins, patches = ax.hist(series, label=legend_labels, color=colors, weights=weights, bins=bins, **pltkwargs)
+    n = [_n[-1] for _n in n.T] # Convert to list of last elements of each bin, which is the total number of events in each bin
   ax.set_xlabel(xlabel)
   if title is not None:
     ax.set_title(title)

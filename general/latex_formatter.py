@@ -126,7 +126,8 @@ def description_table(template, caption=None, label=None,
 
 def uncertainty_table(template, include_unc='both', caption=None, label=None,
                       do_escape=True, save_dir=None,
-                      filename='systematics_uncertainties.tex'):
+                      filename='systematics_uncertainties.tex',
+                      sort_by_unc=False, sort_column=None):
     """
     Build a LaTeX longtblr with Name and uncertainty columns.
 
@@ -144,6 +145,12 @@ def uncertainty_table(template, include_unc='both', caption=None, label=None,
     do_escape : bool
     save_dir : str, optional
     filename : str
+    sort_by_unc : bool
+        If True, sort rows by the chosen uncertainty column.
+    sort_column : str, optional
+        Column to sort by when sort_by_unc is True. Can match the
+        uncertainty field name (for example 'event_rate_unc') or the
+        rendered column header. Defaults to the first uncertainty column.
 
     Returns
     -------
@@ -172,6 +179,13 @@ def uncertainty_table(template, include_unc='both', caption=None, label=None,
                 col_header = unc_labels[field]
             unc_columns.append((tname, field, col_header))
 
+    sort_col_index = 1
+    if sort_column is not None:
+        for idx, (tname, field, col_header) in enumerate(unc_columns):
+            if sort_column in (field, col_header, tname):
+                sort_col_index = idx
+                break
+
     col_spec = 'l' + 'c' * len(unc_columns)
     lines = _begin_longtblr(col_spec, caption=caption, label=label)
 
@@ -181,6 +195,21 @@ def uncertainty_table(template, include_unc='both', caption=None, label=None,
     header += r' \\'
     lines.append(header)
     lines.append(r'\hline')
+
+    def _get_sort_value(key):
+        tname, field, _ = unc_columns[sort_col_index]
+        entry = None
+        if tname in named_tables:
+            entry = named_tables[tname].get(key, {})
+        else:
+            entry = named_tables[None].get(key, {})
+        val = entry.get(field, None)
+        if val is None or hasattr(val, '__len__'):
+            return float('-inf')
+        return float(val)
+
+    if sort_by_unc and len(unc_columns) > 0:
+        sorted_keys = sorted(sorted_keys, key=_get_sort_value, reverse=True)
 
     for key in sorted_keys:
         ref_entry = None

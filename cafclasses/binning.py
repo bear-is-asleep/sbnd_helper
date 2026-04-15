@@ -8,7 +8,7 @@ from sbnd.numu.numu_constants import *
 class Binning2D:
     """Class for handling 2D differential binning in costheta and momentum."""
     
-    def __init__(self, diff_costheta_bins=None, diff_momentum_bins_2d=None):
+    def __init__(self, diff_costheta_bins=None, diff_momentum_bins_2d=None, keep_null=True):
         """
         Initialize 2D binning configuration.
         
@@ -74,6 +74,12 @@ class Binning2D:
 
         #Store bin widths - roll once to shift the null bin to the front
         self.bin_widths = np.roll(np.array([ddict['bin_width'] for ddict in self.differential_dicts.values()]),1)
+
+        if not keep_null:
+            self.differential_dicts = {k: v for k, v in self.differential_dicts.items() if k != -1}
+            self.bin_widths = self.bin_widths[1:]
+            self.differential_centers = self.differential_centers[1:]
+            self.differential_edges = self.differential_edges[1:]
 
     def _initialize_differential_dicts(self):
         """Initialize the differential dictionaries with bin information."""
@@ -179,7 +185,6 @@ class Binning2D:
         #TODO: Add support for bin_by='momentum'
         if diff_dicts is None:
             diff_dicts = self.differential_dicts
-
         assert len(values) == len(self.differential_centers), f'values and differential_centers must be the same length: {len(values)} != {len(self.differential_centers)}'
         hist_dict, bin_by_edges = self.init_hist_dict(bin_by=bin_by, diff_dicts=diff_dicts)
         # Map diff_dict key (differential bin center) to position in values (values is ordered by differential_centers)
@@ -262,15 +267,22 @@ class Binning2D:
         if yerrs is not None:
             yerr_hist_dict,_ = self.bin_differential_dict_binned(yerrs, diff_dicts=diff_dicts, bin_by=bin_by)
         for i, (ax, h, b) in enumerate(zip(axs.flatten(), hist_dict.values(), bin_by_edges)):
-            errors = yerr_hist_dict[i][0] if yerrs is not None else None
-            if frac_unc:
-                errors = errors*h[0]
-            makeplot.plot_hist_edges(h[1], h[0], errors=errors, label=label, ax=ax, **kwargs)
+            # Always draw the histogram values (step)
+            makeplot.plot_hist_edges(h[1], h[0], errors=None, label=label, ax=ax, **kwargs)
+
+            # Optional uncertainty band overlay
+            if yerrs is not None:
+                errors = yerr_hist_dict[i][0]
+                if frac_unc:
+                    yerr_arr = errors*h[0]
+                else:
+                    yerr_arr = errors
+                makeplot.plot_hist_with_uncertainty(bins=h[1], n_perbin=h[0], yerr_arr=yerr_arr, yerr_label='Unc', ax=ax)
             if bin_by == 'costheta':
                 ax.set_xlim(0, MAX_PMOM)
             bin_text = f'{b[0]:.2f} < {bin_by_text} < {b[1]:.2f}'
             if add_labels:
-                plotters.add_label(ax, bin_text, where='centerright', color='black', alpha=1., fontsize=8)
+                plotters.add_label(ax, bin_text, where=(1.,0.75), horizontalalignment='right', color='black', alpha=1., fontsize=8)
         # Add the labels
         if add_labels:
             axs[2, 1].set_xlabel(xlabel)
@@ -336,11 +348,11 @@ class Binning2D:
             fig, axs = plt.subplots(figsize=(12, 8), nrows=3, ncols=3)
         assert len(axs.flatten()) == len(hist_dict), f'axs and hist_dict must be the same length: {len(axs.flatten())} != {len(hist_dict)}'
         if yerrs is not None:
-            yerr_hist_dict,_ = self.bin_differential_dict_binned(yerrs, diff_dicts=diff_dicts, sbin_by=bin_by)
-        for ax, h, b in zip(axs.flatten(), hist_dict.values(), bin_by_edges):
+            yerr_hist_dict,_ = self.bin_differential_dict_binned(yerrs, diff_dicts=diff_dicts, bin_by=bin_by)
+        for i,(ax, h, b) in enumerate(zip(axs.flatten(), hist_dict.values(), bin_by_edges)):
             centers = bin_centers if bin_centers is not None else (h[1][:-1] + h[1][1:])/2
             if yerrs is not None:
-                errors = yerr_hist_dict[c][0]
+                errors = yerr_hist_dict[i][0]
             else:
                 errors = np.sqrt(h[0])
             ax.errorbar(centers, h[0], yerr=errors, fmt='o', label=label, **kwargs)
@@ -348,7 +360,7 @@ class Binning2D:
                 ax.set_xlim(0, MAX_PMOM)
             bin_text = f'{b[0]:.2f} < {bin_by_text} < {b[1]:.2f}'
             if add_labels:
-                plotters.add_label(ax, bin_text, where='centerright', color='black', alpha=1., fontsize=8)
+                plotters.add_label(ax, bin_text, where=(1.,0.75), horizontalalignment='right', color='black', alpha=1., fontsize=8)
         # Add the labels
         axs[2, 1].set_xlabel(xlabel)
         axs[1, 0].set_ylabel(ylabel)
@@ -369,13 +381,18 @@ class Binning2D:
             assert len(yerrs) == len(self.differential_centers), f'yerrs and differential_centers must be the same length: {len(yerrs)} != {len(self.differential_centers)}'
             yerr_hist_dict, _ = self.bin_differential_dict_binned(yerrs, diff_dicts=self.differential_dicts, bin_by=bin_by)
         for ax, (k, h), b in zip(axs.flatten(), hist_dict.items(), bin_by_edges):
-            errors = yerr_hist_dict[k][0] if yerrs is not None else None
-            makeplot.plot_hist_edges(h[1], h[0], errors=errors, label=label, ax=ax, **kwargs)
+            # Always draw the histogram values (step). No errors unless yerrs provided.
+            makeplot.plot_hist_edges(h[1], h[0], errors=None, label=label, ax=ax, **kwargs)
+
+            # Optional uncertainty band overlay
+            if yerrs is not None:
+                yerr_arr = yerr_hist_dict[k][0]
+                makeplot.plot_hist_with_uncertainty(bins=h[1], n_perbin=h[0], yerr_arr=yerr_arr, yerr_label='Unc', ax=ax)
             if bin_by == 'costheta':
                 ax.set_xlim(0, MAX_PMOM)
             bin_text = f'{b[0]:.2f} < {bin_by_text} < {b[1]:.2f}'
             if add_labels:
-                plotters.add_label(ax, bin_text, where='centerright', color='black', alpha=1., fontsize=8)
+                plotters.add_label(ax, bin_text, where=(1.,0.75), horizontalalignment='right', color='black', alpha=1., fontsize=8)
         #Add the labels
         if add_labels:
             axs[2, 1].set_xlabel(xlabel)
@@ -383,7 +400,80 @@ class Binning2D:
         if legend:
             axs[0, 2].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         return fig, axs
-    
+
+    def plot_differential_stairs_binned(
+        self,
+        stairs_y,
+        bin_by='costheta',
+        xlabel='',
+        ylabel='Candidates',
+        label='',
+        fig=None,
+        axs=None,
+        add_labels=False,
+        legend=False,
+        diff_dicts=None,
+        **kwargs,
+    ):
+        """
+        Filled step plot of per-differential-bin heights on the 3x3 differential grid.
+
+        ``stairs_y`` must align with ``self.differential_centers`` (same layout as
+        ``plot_differential_hist_binned``). Typical use: norm syst band height
+        ``sig_unfold * yscale * fracunc_unfold_norm`` computed outside, then passed here.
+
+        Parameters
+        ----------
+        stairs_y : array-like
+            Stair heights per differential bin, length ``len(self.differential_centers)``.
+        bin_by : str
+            ``'costheta'`` or ``'momentum'`` (passed to ``bin_differential_dict_binned``).
+        xlabel, ylabel : str
+            Axis labels when ``add_labels`` is True.
+        label : str
+            Legend label for ``ax.stairs``.
+        fig, axs : optional
+            Figure and 3x3 axes; created if both None.
+        add_labels, legend : bool
+            Panel annotations and legend (same placement as ``plot_differential_hist_binned``).
+        diff_dicts : dict, optional
+            Differential dicts for binning; default ``self.differential_dicts``.
+        **kwargs
+            Extra arguments for ``matplotlib.axes.Axes.stairs`` (defaults:
+            ``fill=True``, ``color='gray'``, ``alpha=0.5``).
+
+        Returns
+        -------
+        fig, axs
+        """
+        bin_by_text = r'$\cos\theta_{\mu}$' if bin_by == 'costheta' else r'$p_{\mu}$'
+        if fig is None and axs is None:
+            fig, axs = plt.subplots(figsize=(12, 8), nrows=3, ncols=3)
+        assert len(stairs_y) == len(self.differential_centers), (
+            f'stairs_y and differential_centers must be the same length: '
+            f'{len(stairs_y)} != {len(self.differential_centers)}'
+        )
+        dd = self.differential_dicts if diff_dicts is None else diff_dicts
+        stairs_hist_dict, bin_by_edges = self.bin_differential_dict_binned(
+            stairs_y, diff_dicts=dd, bin_by=bin_by
+        )
+        stairs_kw = dict(fill=True, color='gray', alpha=0.5)
+        stairs_kw.update(kwargs)
+        stairs_kw.pop('label', None)
+        for ax, h, b in zip(axs.flatten(), stairs_hist_dict.values(), bin_by_edges):
+            ax.stairs(h[0], h[1], label=label, **stairs_kw)
+            if bin_by == 'costheta':
+                ax.set_xlim(0, MAX_PMOM)
+            bin_text = f'{b[0]:.2f} < {bin_by_text} < {b[1]:.2f}'
+            if add_labels:
+                plotters.add_label(ax, bin_text, where=(1.,0.75), horizontalalignment='right', color='black', alpha=1., fontsize=8)
+        if add_labels:
+            axs[2, 1].set_xlabel(xlabel)
+            axs[1, 0].set_ylabel(ylabel)
+        if legend:
+            axs[0, 2].legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        return fig, axs
+
     def plot_differential_scatter_binned(self,values,bin_centers=None,yerrs=None,bin_by='costheta',xlabel='',ylabel='Candidates',label='',fig=None,axs=None,add_labels=False,legend=False,**kwargs):
         """
         Plot the differential scatter plot for each bin of bins1.
@@ -405,7 +495,7 @@ class Binning2D:
                 ax.set_xlim(0, MAX_PMOM)
             bin_text = f'{b[0]:.2f} < {bin_by_text} < {b[1]:.2f}'
             if add_labels:
-                plotters.add_label(ax, bin_text, where='centerright', color='black', alpha=1., fontsize=8)
+                plotters.add_label(ax, bin_text, where=(1.,0.75), horizontalalignment='right', color='black', alpha=1., fontsize=8)
         #Add the labels
         if add_labels:
             axs[2, 1].set_xlabel(xlabel)
@@ -553,7 +643,7 @@ class Binning2D:
     #             ax.set_xlim(0, 4.)
     #         bin_text = f'{b[0]:.2f} < {bin_by_text} < {b[1]:.2f}'
     #         if add_labels:
-    #             plotters.add_label(ax, bin_text, where='centerright', color='black', alpha=1., fontsize=8)
+    #             plotters.add_label(ax, bin_text, where=(1.,0.75), horizontalalignment='right', color='black', alpha=1., fontsize=8)
     #     # Add the labels
     #     axs[2, 1].set_xlabel(xlabel)
         

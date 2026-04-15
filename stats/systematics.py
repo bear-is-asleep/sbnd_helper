@@ -6,15 +6,16 @@ from sbnd.stats.stats import (
     construct_covariance, construct_correlation_matrix, covariance_from_fraccov,
     get_fractional_uncertainty, get_total_unc, convert_smearing_to_response,
     get_smear_matrix, compute_efficiency, compute_sigma_tilde,
-    _cov_eigenvalue_diagnostics, calc_chi2
+    _cov_eigenvalue_diagnostics, calc_chi2, fraccov_from_covariance
 )
 from tqdm import tqdm
 import os
 import copy
 import json
 import warnings
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from sbnd.numu.numu_constants import *
+from sbnd.cafclasses.binning import Binning2D
 
 class Systematics:
     """Class for handling systematic uncertainty processing and computation."""
@@ -33,6 +34,10 @@ class Systematics:
             'rank': None,
             'sigma_tilde': [],
             'sel': [],
+            'response': [],
+            'cv_response': None,
+            'cv_sel': None,
+            'cv_sigma_tilde': None,
             'xsec_cov': None,
             'xsec_cov_unaltered': None,
             'xsec_fraccov_unaltered': None,
@@ -53,7 +58,8 @@ class Systematics:
             'event_fracunc': None,
             'event_totalunc': None,
             'xsec_totalunc': None,
-            'order': None
+            'order': None,
+            'color': None,
         }
     
     def __init__(self, variable_name, bins,
@@ -207,15 +213,9 @@ class Systematics:
             self.response = None
             self.sigma_tilde = None
         
-        # Initialize systematic dictionary
-        if keys is not None:
-            self.sys_dict = self.get_sys_keydict(keys,**kwargs)
-        else:
-            self.sys_dict = {}
-        
-        # Initialize systematic results dictionary
         self.systematics = {}
-        self._initialize_systematic_dicts()
+        if keys is not None:
+            self._initialize_from_keys(keys, **kwargs)
 
     def _get_default_xlabel(self):
         """
@@ -231,23 +231,34 @@ class Systematics:
             return r'Reconstructed $1/Opt0$ Score'
         return f'{self.variable_name}'
     
-    def _initialize_systematic_dicts(self):
-        """Initialize the systematic dictionaries with the template structure."""
+    def add_syst(self, key, metadata=None):
+        """Add a new systematic to the systematics dictionary."""
         dict_template = Systematics._get_dict_template()
-        
-        for key in self.sys_dict:
-            self.systematics[key] = dict_template.copy()
-            self.systematics[key]['cols'] = self.sys_dict[key]['cols']
-            self.systematics[key]['col_names'] = self.sys_dict[key]['col_names']
-            self.systematics[key]['type'] = self.sys_dict[key]['type']
-            self.systematics[key]['name'] = self.sys_dict[key]['name']
-            # If label/description exist in sys_dict (from saved data), use them; otherwise default to name/empty
-            self.systematics[key]['label'] = self.sys_dict[key].get('label', self.sys_dict[key]['name'])
-            self.systematics[key]['description'] = self.sys_dict[key].get('description', '')
-            self.systematics[key]['variation'] = self.sys_dict[key]['variation']
-            self.systematics[key]['order'] = self.sys_dict[key].get('order', None)
+        self.systematics[key] = dict_template.copy()
+        if metadata is not None:
+            for field in ('cols', 'col_names', 'type', 'name', 'variation', 'order'):
+                self.systematics[key][field] = metadata.get(field)
+            self.systematics[key]['label'] = metadata.get('label', metadata.get('name'))
+            self.systematics[key]['description'] = metadata.get('description', '')
+
+    def _initialize_from_keys(self, keys, **kwargs):
+        """Build systematics entries from raw keys via get_sys_keydict."""
+        sys_key_info = self.get_sys_keydict(keys, **kwargs)
+        for key, metadata in sys_key_info.items():
+            self.add_syst(key, metadata=metadata)
+
     def __repr__(self):
-        return f'Systematics(variable={self.variable_name}, keys={list(self.sys_dict.keys())})'
+        return f'Systematics(variable={self.variable_name}, keys={list(self.systematics.keys())})'
+
+    @property
+    def types(self):
+        """Return sorted unique systematic type names."""
+        return sorted({
+            sdict.get('type')
+            for sdict in self.systematics.values()
+            if sdict.get('type') not in (None, '')
+        })
+
     def get_sys_keydict(self,keys,pattern=None,stype='RW'):
         """
         We're going to use the fact that the systematic are in the level of truth. '...'
@@ -330,6 +341,10 @@ class Systematics:
             else:
                 print(f'Unknown systematic type: {stype}')
                 return 'unknown'
+        def assign_candidate(candidate):
+            if candidate == 'stat':
+                return 'stat_rw' #Change this to stat_rw or something if combining other stat unc
+            return candidate
         sys_col_dict = {}
         cnt = -1
         for k in keys:
@@ -346,6 +361,7 @@ class Systematics:
             if not passes:
                 continue
                     #print(candidate)
+            candidate = assign_candidate(candidate)
             if candidate not in sys_col_dict:
                 formatted_name = format_name(candidate)
                 sys_col_dict[candidate] = {'cols' : [], 'col_names' : [], 'type' : assign_type(candidate,stype), 'name' : formatted_name, 'label' : formatted_name, 'description' : '', 'variation' : assign_variation(candidate,stype)}
@@ -356,7 +372,7 @@ class Systematics:
         return sys_col_dict
     
     def process_systematics(self, mc_signal_data, mc_sel_signal_data, mc_sel_background_data,
-                           progress_bar=False):
+                           progress_bar=False,sys_names=None):
         """
         Process all systematic universes and compute histograms, efficiencies, 
         smearing/response matrices, and sigma_tilde values.
@@ -371,12 +387,22 @@ class Systematics:
             MC selected background slice with data attribute containing systematic columns
         progress_bar : bool
             Whether to show progress bar (requires tqdm)
+        sys_names : list of str, optional
+            Names of the systematics to process. If None, process all systematics
         """
-        if progress_bar:
-            iterator = tqdm(self.systematics.items(), unit=' goomba')
-        else:
+        # Set items to iterate over
+        if sys_names is None:
             iterator = self.systematics.items()
-        keys_to_delete = []
+            keys_to_delete = []
+        else:
+            keys_to_delete = [k for k in self.systematics.keys() if k not in sys_names]
+            iterator = [(k,v) for k,v in self.systematics.items() if k in sys_names]
+            #Print any missing systematics from sys_names
+            for k in sys_names:
+                if k not in self.systematics:
+                    print(f' - WARNING: {k} not found in systematics dictionary')
+        if progress_bar:
+            iterator = tqdm(iterator, unit=' goomba')
         #print(f'Processing ({list(self.systematics.keys())})')
         for key, sys_dict in iterator:
             cols = sys_dict['cols']
@@ -388,93 +414,93 @@ class Systematics:
             sys_dict['sigma_tilde'] = []
             sys_dict['sel'] = []
             sys_dict['sel_background'] = []
-            sys_dict['rank'] = len(sys_dict['cols'])
-            #sys_dict['response'] = []
-            #sys_dict['smearing'] = []
             sys_dict['eff_truth'] = []
-            for col, col_name in zip(cols, col_names):
-                # Skip CV for multisigma variations
-                if '_cv' in col_name and sys_dict['variation'] == 'multisigma':
-                    continue
+            sys_dict['response'] = []
+            sys_dict['cv_response'] = None
+            is_multisigma = sys_dict['variation'] == 'multisigma'
+            has_xsec = (self._true_sig is not None and self._true_sel is not None
+                        and self._true_sel_background is not None and self.xsec_unit is not None)
 
+            ref_sig_truth = self.sig_truth
+            ref_eff_truth = self.eff_truth
+
+            # For multisigma, reorder so the CV column is processed first
+            iter_cols, iter_names = cols, col_names
+            if is_multisigma:
+                cv_idx = [i for i, cn in enumerate(col_names) if '_cv' in cn]
+                other_idx = [i for i, cn in enumerate(col_names) if '_cv' not in cn]
+                order = cv_idx + other_idx
+                iter_cols = [cols[i] for i in order]
+                iter_names = [col_names[i] for i in order]
+
+            for col, col_name in zip(iter_cols, iter_names):
+                is_cv = '_cv' in col_name and is_multisigma
                 if col not in mc_sel_signal_data.keys() or col not in mc_sel_background_data.keys() or col not in mc_signal_data.keys():
-                    #print(f'WARNING: {col} not in mc_sel_signal_data or mc_sel_background_data')
                     continue
-                # Extract the reweighting factors (copy to avoid SettingWithCopyWarning when sanitizing)
                 rw_sel_signal = mc_sel_signal_data[col].copy()
                 rw_sel_background = mc_sel_background_data[col].copy()
                 rw_signal = mc_signal_data[col].copy()
-                #Convert inf or nan to 1
                 rw_sel_signal[(abs(rw_sel_signal) == np.inf) | (np.isnan(rw_sel_signal))] = 1
                 rw_sel_background[(abs(rw_sel_background) == np.inf) | (np.isnan(rw_sel_background))] = 1
                 rw_signal[(abs(rw_signal) == np.inf) | (np.isnan(rw_signal))] = 1
-                # Convert negative weights to 0
-                rw_sel_signal[rw_sel_signal < 0] = 0
-                rw_sel_background[rw_sel_background < 0] = 0
-                rw_signal[rw_signal < 0] = 0
-                # Selected reco histogram
+                rw_sel_signal = np.clip(rw_sel_signal, 0, 10)
+                rw_sel_background = np.clip(rw_sel_background, 0, 10)
+                rw_signal = np.clip(rw_signal, 0, 10)
                 _sel, _ = np.histogram(
                     self._reco_sel, bins=self.bins,
                     weights=self._genweights_sel * rw_sel_signal
                 )
-                
-                # Selected background reco histogram (no weights variation)
                 _sel_background, _ = np.histogram(
                     self._reco_sel_background, bins=self.bins,
                     weights=self._genweights_sel_background * rw_sel_background
                 )
-                
-                # Store sel results
-                sys_dict['sel'].append(_sel + _sel_background)
-                sys_dict['sel_background'].append(_sel_background)
-                
-                # Compute sigma_tilde only if we have true distributions and xsec_unit
-                if self._true_sig is not None and self._true_sel is not None and self._true_sel_background is not None and self.xsec_unit is not None:
-                    # Get the distributions for this universe
-                    # Signal truth histogram
+
+                if is_cv:
+                    sys_dict['cv_sel'] = _sel + _sel_background
+                else:
+                    sys_dict['sel'].append(_sel + _sel_background)
+                    sys_dict['sel_background'].append(_sel_background)
+
+                if has_xsec:
                     _sig_truth, _ = np.histogram(
                         self._true_sig, bins=self.bins,
                         weights=self._genweights_sig * rw_signal
                     )
-                    
-                    # Selected truth histogram
                     _sel_truth, _ = np.histogram(
                         self._true_sel, bins=self.bins,
                         weights=self._genweights_sel * rw_sel_signal
                     )
-                    
-                    # Get the efficiency
-                    _eff_truth = compute_efficiency(_sig_truth, _sel_truth)
-                    
-                    # Get the smearing matrix
                     _smearing = get_smear_matrix(
                         self._true_sel, self._reco_sel, self.bins,
                         weights=self._genweights_sel * rw_sel_signal
                     )
-                    
-                    # Use universe efficiency for GENIE xsec uncertainties, CV efficiency otherwise
-                    if sys_dict['type'] == 'xsec':
+                    _eff_truth = compute_efficiency(_sig_truth, _sel_truth)
+                    if is_cv:
+                        ref_sig_truth = _sig_truth
+                        ref_eff_truth = _eff_truth
                         _response = convert_smearing_to_response(_smearing, _eff_truth)
+                        sys_dict['cv_sigma_tilde'] = compute_sigma_tilde(
+                            _response, ref_sig_truth, _sel_background, self.xsec_unit)
+                        sys_dict['cv_response'] = _response
                     else:
-                        _response = convert_smearing_to_response(_smearing, self.eff_truth)
-                    
-                    # Compute sigma_tilde
-                    _sigma_tilde = compute_sigma_tilde(
-                        _response, self.sig_truth, _sel_background, self.xsec_unit
-                    )
-                    
-                    # Store results
-                    #sys_dict['response'].append(_response)
-                    sys_dict['sigma_tilde'].append(_sigma_tilde)
-                    sys_dict['eff_truth'].append(_eff_truth)
-                    #sys_dict['smearing'].append(_smearing)
-                else:
-                    # If we don't have the required parameters, append None
-                    #sys_dict['response'].append(None)
+                        if sys_dict['type'] == 'xsec':
+                            _response = convert_smearing_to_response(_smearing, _eff_truth)
+                            sys_dict['eff_truth'].append(_eff_truth)
+                        else:
+                            ref_eff_truth = compute_efficiency(ref_sig_truth, _sel_truth)
+                            _response = convert_smearing_to_response(_smearing, ref_eff_truth)
+                            sys_dict['eff_truth'].append(ref_eff_truth)
+                        _sigma_tilde = compute_sigma_tilde(
+                            _response, ref_sig_truth, _sel_background, self.xsec_unit
+                        )
+                        sys_dict['sigma_tilde'].append(_sigma_tilde)
+                        sys_dict['response'].append(_response)
+                elif not is_cv:
                     sys_dict['sigma_tilde'].append(None)
                     sys_dict['eff_truth'].append(None)
-                    #sys_dict['smearing'].append(None)
-            #Delete unusable universes
+                    sys_dict['response'].append(None)
+
+            sys_dict['rank'] = len(sys_dict['sel'])
             if len(sys_dict['sel']) == 0:
                 keys_to_delete.append(key)
                 print(f'WARNING: {key} has no usable universes, deleting')
@@ -544,6 +570,8 @@ class Systematics:
             #Clear the lists for this systematic
             sys_dict['sigma_tilde'] = []
             sys_dict['sel'] = []
+            sys_dict['response'] = []
+            sys_dict['cv_response'] = None
             sys_dict['rank'] = 1 #Only single sigma variation so rank is 1
             #print(f'i: {i}, sys_name: {sys_name}, len(reco_sel_vars): {len(reco_sel_vars)}')
 
@@ -580,10 +608,16 @@ class Systematics:
                 _var_smearing = get_smear_matrix(
                     true_sel_var, reco_sel_var, self.bins, weights=genweights_sel_var
                 )
-                
+
+
+                _sel_truth, _ = np.histogram(
+                    true_sel_var, bins=self.bins,
+                    weights=genweights_sel_var
+                )
                 # Use CV efficiency (not variation-specific) for response matrix conversion
+                _eff_truth = compute_efficiency(self.sig_truth, _sel_truth)
                 _var_response = convert_smearing_to_response(
-                    _var_smearing, self.eff_truth
+                    _var_smearing, _eff_truth
                 )
                 
                 # Compute sigma_tilde for variation
@@ -593,9 +627,11 @@ class Systematics:
                 
                 # Store results
                 sys_dict['sigma_tilde'].append(_var_sigma_tilde)
+                sys_dict['response'].append(_var_response)
             else:
                 # If we don't have the required attributes, append None
                 sys_dict['sigma_tilde'].append(None)
+                sys_dict['response'].append(None)
     
     def process_flat_systematic(self, sys_key, frac_unc):
         """
@@ -625,6 +661,8 @@ class Systematics:
         # Reset lists for this systematic
         sys_dict['sigma_tilde'] = []
         sys_dict['sel'] = []
+        sys_dict['response'] = []
+        sys_dict['cv_response'] = None
         # Create two symmetric variations: +frac_unc and -frac_unc
         for sign in [+1, -1]:
             # Apply to sel (reco event rate)
@@ -637,6 +675,10 @@ class Systematics:
                 sys_dict['sigma_tilde'].append(_sigma_tilde_variation)
             else:
                 sys_dict['sigma_tilde'].append(None)
+            if self.response is not None:
+                sys_dict['response'].append(np.copy(self.response))
+            else:
+                sys_dict['response'].append(None)
     
     def process_stat_systematics(self, sys_key='stat'):
         """
@@ -651,7 +693,7 @@ class Systematics:
         if sys_key not in self.systematics:
             dict_template = Systematics._get_dict_template()
             sys_dict = dict_template.copy()
-            sys_dict['type'] = sys_key
+            sys_dict['type'] = 'stat'
             sys_dict['name'] = sys_key
             sys_dict['label'] = sys_key
             sys_dict['description'] = ''
@@ -664,6 +706,8 @@ class Systematics:
         # Reset lists for this systematic
         sys_dict['sigma_tilde'] = []
         sys_dict['sel'] = []
+        sys_dict['response'] = []
+        sys_dict['cv_response'] = None
         sys_dict['rank'] = -1 #Make sure the covarariance is diagonal
         
         # Create two symmetric variations: +sqrt(N) and -sqrt(N)
@@ -686,6 +730,10 @@ class Systematics:
                 sys_dict['sigma_tilde'].append(self.sigma_tilde + sign * sigma_tilde_unc)
             else:
                 sys_dict['sigma_tilde'].append(None)
+            if self.response is not None:
+                sys_dict['response'].append(np.copy(self.response))
+            else:
+                sys_dict['response'].append(None)
     
     def compute_covariances(self, keys=None, check=False, do_correct_negative_eigenvalues=False, compute_xsec_cov=True, **kwargs):
         """
@@ -717,13 +765,35 @@ class Systematics:
             sys_dict = self.systematics[key]
             if len(sys_dict['sel']) == 0:
                 raise ValueError(f'No sel events for systematic {key} for {self.variable_name}')
+            # First do event covariance
+            event_cv = sys_dict['cv_sel'] if sys_dict.get('cv_sel') is not None else self.sel + self.sel_background
+            _cov, _cov_unaltered, _frac, _frac_unaltered, _corr, _fracunc, _event_iters = construct_covariance(
+                event_cv, sys_dict['sel'],
+                rank=sys_dict['rank'],
+                do_correct_negative_eigenvalues=do_correct_negative_eigenvalues,
+                assert_cov=False,
+                **kwargs
+            )
+            sys_dict['event_cov'] = _cov
+            sys_dict['event_cov_unaltered'] = _cov_unaltered
+            sys_dict['event_fraccov'] = _frac
+            sys_dict['event_fraccov_unaltered'] = _frac_unaltered
+            sys_dict['event_corr'] = _corr
+            sys_dict['event_fracunc'] = _fracunc
+            if _event_iters is not None:
+                sys_dict['event_iters'] = _event_iters
+            sys_dict['event_totalunc'] = get_total_unc(event_cv, sys_dict['event_fracunc'])
+            if check:
+                eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(_cov)
+                sys_dict['event_cond'] = cond
+                sys_dict['event_eigvals'] = eigvals
 
             # Xsec (only compute if sigma_tilde exists and compute_xsec_cov; use type-specific CV when available)
             if compute_xsec_cov and self.sigma_tilde is not None and sys_dict['sigma_tilde'] is not None:
                 if len(sys_dict['sigma_tilde']) == 0:
                     raise ValueError(f'No sigma_tilde events for systematic {key} for {self.variable_name} (but we expect them)')
                 sigma_tilde_list = sys_dict['sigma_tilde']
-                xsec_cv = self.sigma_tilde
+                xsec_cv = sys_dict['cv_sigma_tilde'] if sys_dict.get('cv_sigma_tilde') is not None else self.sigma_tilde
                 _xsec_cov, _xsec_cov_unaltered, _xsec_frac, _xsec_frac_unaltered, _xsec_corr, _xsec_fracunc, _xsec_iters = construct_covariance(
                     xsec_cv, sigma_tilde_list,
                     rank=sys_dict['rank'],
@@ -751,28 +821,22 @@ class Systematics:
                 sys_dict['xsec_corr'] = None
                 sys_dict['xsec_fracunc'] = None
                 sys_dict['xsec_totalunc'] = None
+            if 'cosmic' in key and compute_xsec_cov:
+                #Special treatment for cosmic uncertainty, just use the event uncertainty, scaled by xsec unit
+                print(f'sel_background: {self.sel_background}, sel: {self.sel}, xsec_unit: {self.xsec_unit}')
+                sys_dict['xsec_cov'] = covariance_from_fraccov(
+                    sys_dict['event_fraccov'], (self.sel_background + self.sel) * self.xsec_unit
+                )
+                sys_dict['xsec_fraccov'] = sys_dict['event_fraccov']
+                sys_dict['xsec_fraccov_unaltered'] = sys_dict['event_fraccov_unaltered']
+                sys_dict['xsec_corr'] = sys_dict['event_corr']
+                sys_dict['xsec_fracunc'] = sys_dict['event_fracunc']
+                sys_dict['xsec_totalunc'] = sys_dict['event_totalunc']
+                if check:
+                    eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(_xsec_cov)
+                    sys_dict['xsec_cond'] = cond
+                    sys_dict['xsec_eigvals'] = eigvals
             
-            event_cv = self.sel + self.sel_background
-            _cov, _cov_unaltered, _frac, _frac_unaltered, _corr, _fracunc, _event_iters = construct_covariance(
-                event_cv, sys_dict['sel'],
-                rank=sys_dict['rank'],
-                do_correct_negative_eigenvalues=do_correct_negative_eigenvalues,
-                assert_cov=False,
-                **kwargs
-            )
-            sys_dict['event_cov'] = _cov
-            sys_dict['event_cov_unaltered'] = _cov_unaltered
-            sys_dict['event_fraccov'] = _frac
-            sys_dict['event_fraccov_unaltered'] = _frac_unaltered
-            sys_dict['event_corr'] = _corr
-            sys_dict['event_fracunc'] = _fracunc
-            if _event_iters is not None:
-                sys_dict['event_iters'] = _event_iters
-            sys_dict['event_totalunc'] = get_total_unc(event_cv, sys_dict['event_fracunc'])
-            if check:
-                eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(_cov)
-                sys_dict['event_cond'] = cond
-                sys_dict['event_eigvals'] = eigvals
     def compute_inverse_covariances(self, keys=None, **kwargs):
         """
         Compute inverse covariance matrices for each systematic.
@@ -817,7 +881,7 @@ class Systematics:
                     keys.append(k)
         return keys
     
-    def combine(self, other, other_override=False, store_other=False, other_name='other', rescale_covs=True):
+    def combine(self, other, other_override=False, store_other=False, other_name='other', rescale_covs=True, rescale_fraccovs=False):
         """
         Combine another Systematics object into this one.
         Non-overlapping keys from other are added to this object.
@@ -835,12 +899,17 @@ class Systematics:
         rescale_covs : bool, optional
             If True, rescale the covariance matrices to the selected and background of this object
             This is necessary because the covariance matrices are computed on the selected and background of the other object
+        rescale_fraccovs : bool, optional
+            If True, rescale the fractional covariance matrices to the covariance and selected/background of this object
+            Also rescale the fractional uncertainties
         """
         # Check compatibility
         if not np.array_equal(self.bins, other.bins):
             raise ValueError(f'Cannot combine Systematics objects: bins differ')
         if self.variable_name != other.variable_name:
             raise ValueError(f'Cannot combine Systematics objects: variable names differ ({self.variable_name} vs {other.variable_name})')
+        if rescale_covs and rescale_fraccovs:
+            raise ValueError(f'Both rescale_covs and rescale_fraccovs cannot be True')
         # if self.xsec_unit != other.xsec_unit:
         #     raise ValueError(f'Cannot combine Systematics objects: xsec_unit differs ({self.xsec_unit} vs {other.xsec_unit})')
         
@@ -850,14 +919,29 @@ class Systematics:
                 #print(f'Adding key {key} to self.systematics')
                 # Deep copy the systematic dictionary
                 self.systematics[key] = copy.deepcopy(sys_dict)
-                if rescale_covs:
+                valid = self.systematics[key]['event_cov'] is not None
+                if rescale_covs and valid:
                     self.systematics[key]['event_cov'] = covariance_from_fraccov(
                         self.systematics[key]['event_fraccov'], self.sel + self.sel_background
                     )
-                    if self.sigma_tilde is not None:
+                    valid_xsec = self.systematics[key]['xsec_cov'] is not None
+                    if self.sigma_tilde is not None and valid_xsec:
                         self.systematics[key]['xsec_cov'] = covariance_from_fraccov(
                             self.systematics[key]['xsec_fraccov'], self.sigma_tilde
                         )
+                if rescale_fraccovs and valid:
+                    self.systematics[key]['event_fraccov'] = fraccov_from_covariance(
+                        self.systematics[key]['event_cov'], self.sel + self.sel_background
+                    )
+                    self.systematics[key]['event_fracunc'] = get_fractional_uncertainty(self.sel + self.sel_background, self.systematics[key]['event_cov'])
+                    self.systematics[key]['event_totalunc'] = get_total_unc(self.sel + self.sel_background, self.systematics[key]['event_fracunc'])
+                    valid_xsec = self.systematics[key]['xsec_cov'] is not None
+                    if self.sigma_tilde is not None and valid_xsec:
+                        self.systematics[key]['xsec_fraccov'] = fraccov_from_covariance(
+                            self.systematics[key]['xsec_cov'], self.sigma_tilde
+                        )
+                        self.systematics[key]['xsec_fracunc'] = get_fractional_uncertainty(self.sigma_tilde, self.systematics[key]['xsec_cov'])
+                        self.systematics[key]['xsec_totalunc'] = get_total_unc(self.sigma_tilde, self.systematics[key]['xsec_fracunc'])
             # If key exists in both, skip it (non-overlapping only)
             else:
                 if other_override:
@@ -865,20 +949,28 @@ class Systematics:
                     pass
                 else:
                     self.systematics[key] = copy.deepcopy(sys_dict)
-                    if rescale_covs:
+                    valid = self.systematics[key]['event_cov'] is not None
+                    if rescale_covs and valid:
                         self.systematics[key]['event_cov'] = covariance_from_fraccov(
                             self.systematics[key]['event_fraccov'], self.sel + self.sel_background
                         )
-                        if self.sigma_tilde is not None:
+                        valid_xsec = self.systematics[key]['xsec_cov'] is not None
+                        if self.sigma_tilde is not None and valid_xsec:
                             self.systematics[key]['xsec_cov'] = covariance_from_fraccov(
                                 self.systematics[key]['xsec_fraccov'], self.sigma_tilde
                             )
-        
-        # Also merge sys_dict if it exists
-        if hasattr(other, 'sys_dict'):
-            for key, val in other.sys_dict.items():
-                if key not in self.sys_dict:
-                    self.sys_dict[key] = copy.deepcopy(val)
+                    if rescale_fraccovs and valid:
+                        self.systematics[key]['event_fraccov'] = fraccov_from_covariance(
+                            self.systematics[key]['event_cov'], self.sel + self.sel_background
+                        )
+                        self.systematics[key]['event_fracunc'] = get_fractional_uncertainty(self.sel + self.sel_background, self.systematics[key]['event_cov'])
+                        self.systematics[key]['event_totalunc'] = get_total_unc(self.sel + self.sel_background, self.systematics[key]['event_fracunc'])
+                        valid_xsec = self.systematics[key]['xsec_cov'] is not None
+                        if self.sigma_tilde is not None and valid_xsec:
+                            self.systematics[key]['xsec_fraccov'] = fraccov_from_covariance(
+                                self.systematics[key]['xsec_cov'], self.sigma_tilde)
+                            self.systematics[key]['xsec_fracunc'] = get_fractional_uncertainty(self.sigma_tilde, self.systematics[key]['xsec_cov'])
+                            self.systematics[key]['xsec_totalunc'] = get_total_unc(self.sigma_tilde, self.systematics[key]['xsec_fracunc'])
         
         if store_other:
             sdict = Systematics._get_dict_template()
@@ -949,13 +1041,15 @@ class Systematics:
             print(f'   ')
         return chi2_dict
 
-    def _get_cv_source(self, sys_type):
+    def _get_cv_source(self, sys_type, sys_name):
         """Get the correct CV source for a given systematic type.
         
         Parameters
         ----------
         sys_type : str
             The type of systematic (e.g., 'xsec', 'flux', 'geant4', 'cosmic', 'det')
+        sys_name : str
+            The systematic name. Used for special-case CV routing.
         
         Returns
         -------
@@ -971,9 +1065,11 @@ class Systematics:
             return self.systematics['cosmic_data']
         elif 'det_data' in self.systematics and sys_type in ['pds','tpc','sce','calo']:
             return self.systematics['det_data']
+        elif sys_type == 'stat' and ('lowe' in sys_name) and ('lowe' in self.systematics):
+            return self.systematics['lowe']
         return None
     
-    def _get_cv_for_type(self, sys_type, cv_key='sel'):
+    def _get_cv_for_type(self, sys_type, cv_key='sel', sys_dict=None):
         """Get the correct CV array for a given systematic type and CV key.
         
         Parameters
@@ -982,13 +1078,26 @@ class Systematics:
             The type of systematic
         cv_key : str
             Either 'sel' or 'sigma_tilde'
+        sys_dict : dict, optional
+            Per-systematic dict. If it contains cv_sel / cv_sigma_tilde, those
+            take priority over type-based lookup.
         
         Returns
         -------
         np.ndarray or None
             The CV array, or None if not available
         """
-        cv_source = self._get_cv_source(sys_type)
+        if sys_dict is not None:
+            if cv_key == 'sigma_tilde' and sys_dict.get('cv_sigma_tilde') is not None:
+                #print(f'Using cv_sigma_tilde for {sys_dict["name"]}')
+                return sys_dict['cv_sigma_tilde']
+            elif cv_key == 'sel' and sys_dict.get('cv_sel') is not None:
+                return sys_dict['cv_sel']
+
+        sys_name = ''
+        if sys_dict is not None and sys_dict.get('name') is not None:
+            sys_name = sys_dict.get('name')
+        cv_source = self._get_cv_source(sys_type, sys_name)
         
         if cv_source is not None:
             if cv_key == 'sigma_tilde' and cv_source.get('sigma_tilde') is not None:
@@ -1070,6 +1179,9 @@ class Systematics:
                     if sys_dict['event_cov_unaltered'] is not None:
                         self.systematics[sk]['event_cov_unaltered'] += sys_dict['event_cov_unaltered']
                     if sys_dict['xsec_fraccov'] is not None:
+                        if self.systematics[sk]['xsec_fraccov'] is None:
+                            print(self.systematics)
+                            raise ValueError(f'xsec_fraccov is None for {sk}')
                         self.systematics[sk]['xsec_fraccov'] += sys_dict['xsec_fraccov']
                     if sys_dict['xsec_cov'] is not None:
                         self.systematics[sk]['xsec_cov'] += sys_dict['xsec_cov']
@@ -1207,7 +1319,65 @@ class Systematics:
         
         return template
     
+    def _per_bin_event_rate_unc(self, sys_dict, base_key, use_fracunc, default_cv):
+        """
+        Per-bin fractional uncertainty or sqrt(diag fraccov) for event or xsec rate plots.
+
+        Parameters
+        ----------
+        sys_dict : dict
+            Single systematic entry from self.systematics.
+        base_key : str
+            'event' or 'xsec'.
+        use_fracunc : bool
+            If True, return ``{base_key}_fracunc``; else convert from ``{base_key}_fraccov``.
+        default_cv : np.ndarray
+            Fallback CV for covariance_from_fraccov when _get_cv_for_type returns None.
+
+        Returns
+        -------
+        np.ndarray or None
+            Per-bin uncertainty, or None if missing.
+        """
+        if use_fracunc:
+            return sys_dict.get(f'{base_key}_fracunc')
+        cv_key = 'sigma_tilde' if base_key == 'xsec' else 'sel'
+        target_cv = self._get_cv_for_type(sys_dict.get('type'), cv_key=cv_key, sys_dict=sys_dict)
+        if target_cv is None:
+            target_cv = default_cv
+        return np.sqrt(np.diag(covariance_from_fraccov(sys_dict.get(f'{base_key}_fraccov'), target_cv)))
+
+    _COLORABLE_VARIATIONS = frozenset({'multisim', 'multisigma', 'unisim', 'summary', 'unknown'})
+
+    def set_colors(self):
+        """
+        Assign plot colors for physics systematics and summary rows (Glasbey via colorcet).
+        Summary key ``total`` is always black; does not consume a palette slot.
+        Other variation types (stat, flat, self) are left with ``color`` None.
+        """
+        import colorcet as cc
+        import seaborn as sns
+
+        eligible = sorted(
+            k
+            for k, d in self.systematics.items()
+            if d.get('variation') in Systematics._COLORABLE_VARIATIONS
+        )
+        total_is_summary = (
+            'total' in self.systematics
+            and self.systematics['total'].get('variation') == 'summary'
+        )
+        palette_keys = sorted(k for k in eligible if not (total_is_summary and k == 'total'))
+        if total_is_summary:
+            self.systematics['total']['color'] = 'red'
+        if len(palette_keys) == 0:
+            return
+        palette = sns.color_palette(cc.glasbey, n_colors=len(palette_keys))
+        for i, k in enumerate(palette_keys):
+            self.systematics[k]['color'] = palette[i]
+    
     def plot_event_rate_errs(self, base_key, exclude_keys=[], include_keys=[],
+                            include_types=[], exclude_types=[], include_variations=[], exclude_variations=[],
                             xlabel='', max_uncs=None, fig=None, ax=None, sort=False, use_fracunc=True):
         """
         Plot the event rate uncertainties for a given base key.
@@ -1220,6 +1390,14 @@ class Systematics:
             A list of keys to exclude from the plot
         include_keys : list
             List of keys to include, if empty use all keys (except exclude keys)
+        include_types : list
+            List of systematic types to include, if empty use all types
+        exclude_types : list
+            List of systematic types to exclude
+        include_variations : list
+            List of systematic variations to include, if empty use all variations
+        exclude_variations : list
+            List of systematic variations to exclude
         xlabel : str
             The x-axis label
         max_uncs : int, optional
@@ -1277,9 +1455,9 @@ class Systematics:
         if fig is None and ax is None:
             fig, ax = plt.subplots()
         if base_key == 'event':
-            target_cv = self.sel + self.sel_background
+            default_cv = self.sel + self.sel_background
         elif base_key == 'xsec':
-            target_cv = self.sigma_tilde
+            default_cv = self.sigma_tilde
         else:
             raise ValueError(f'Invalid base key: {base_key}')
         cnt = 0
@@ -1288,23 +1466,32 @@ class Systematics:
                 break
             if sys_name in exclude_keys or sys_name not in include_keys:
                 continue
-            
+            sys_type = sys_dict.get('type')
+            if sys_type in exclude_types:
+                continue
+            if len(include_types) != 0 and sys_type not in include_types:
+                continue
+            if sys_dict.get('variation') in exclude_variations:
+                continue
+            if len(include_variations) != 0 and sys_dict.get('variation') not in include_variations:
+                continue
             cnt += 1
-            c = unc_colors[cnt]
+            c = sys_dict.get('color')
+            if c is None:
+                c = unc_colors[cnt]
             total_unc = sys_dict.get(f'{base_key}_totalunc', 0)
-            if use_fracunc:
-                unc = sys_dict.get(f'{base_key}_fracunc')
-            else:
-                unc = np.sqrt(np.diag(covariance_from_fraccov(sys_dict.get(f'{base_key}_fraccov'), target_cv)))
+            unc = self._per_bin_event_rate_unc(sys_dict, base_key, use_fracunc, default_cv)
             
             if unc is None:
                 continue
             label = f"{sys_dict['label']} ({total_unc*100:.1f}%)"
-            #color looks bad, skip for now
             makeplot.plot_hist_edges(
-                self.bins, unc, None, ax=ax, label=label#, color=c
+                self.bins, unc, None, ax=ax, label=label, color=c
             )
         
+        # Redo max_unc
+        max_uncs = max(1, min(max_uncs, len(ax.get_lines())))
+
         if use_fracunc:
             ylabel_type = ' Uncertainty'
         else:
@@ -1323,6 +1510,219 @@ class Systematics:
         
         return [fig,ax,None]
     
+    def plot_event_rate_errs_2d(
+        self,
+        binning2d,
+        base_key,
+        exclude_keys=[],
+        include_keys=[],
+        include_types=[],
+        exclude_types=[],
+        include_variations=[],
+        exclude_variations=[],
+        xlabel='',
+        max_uncs=None,
+        fig=None,
+        axs=None,
+        ncols=3,
+        sort=False,
+        use_fracunc=True,
+        panel_label_prefix='',
+        legend=True,
+    ):
+        """
+        Plot per-bin event or xsec rate uncertainties on a cosθ by momentum panel grid.
+
+        Same filtering and per-bin uncertainty logic as plot_event_rate_errs, but each
+        cosθ slice is drawn as a step histogram vs momentum using the Binning2D geometry.
+
+        Parameters
+        ----------
+        binning2d : Binning2D
+            Must match how differential bins were defined: same diff_costheta_bins,
+            diff_momentum_bins_2d, and keep_null as used for this Systematics instance
+            so len(differential_centers) matches len(per-bin unc arrays).
+        base_key : str
+            'event' or 'xsec'.
+        exclude_keys, include_keys, include_types, exclude_types,
+        include_variations, exclude_variations, max_uncs, sort, use_fracunc
+            Same as plot_event_rate_errs.
+        xlabel : str
+            Momentum axis label; default is reconstructed p_mu if empty.
+        fig, axs : optional
+            Figure and axes grid; if both None, a grid with ncols columns is created.
+        ncols : int
+            Number of columns in the panel grid (default 3).
+        panel_label_prefix : str
+            Prepended to each panel cosθ range label.
+        legend : bool
+            If True, draw the legend on ``axs[0, 2]`` when the grid has at least three columns
+            (handles come from the first cosθ panel, where step labels are set).
+
+        Returns
+        -------
+        list
+            [fig, axs, None] for consistency with plot_event_rate_errs.
+        """
+        if not isinstance(binning2d, Binning2D):
+            raise TypeError('binning2d must be a Binning2D instance')
+
+        # Default momentum label (1D plot uses self.xlabel which is often bin ID for differential)
+        if not xlabel:
+            xlabel = r'Reconstructed $p_{\mu}$ [GeV/c]'
+
+        valid_keys = []
+        for key, sys_dict in self.systematics.items():
+            if sys_dict.get(f'{base_key}_totalunc') is not None:
+                valid_keys.append(key)
+        systematics_to_plot = {k: v for k, v in self.systematics.items() if k in valid_keys}
+        if sort:
+            sorted_items = sorted(
+                systematics_to_plot.items(),
+                key=lambda x: x[1].get(f'{base_key}_totalunc', 0),
+                reverse=True,
+            )
+        else:
+            sorted_items = systematics_to_plot.items()
+        if len(sorted_items) == 0:
+            print(
+                f'WARNING: No systematics ({self.variable_name}) found for {base_key} '
+                'skipping 2d event rate error plot...'
+            )
+            return [fig, axs, None]
+
+        if max_uncs is None:
+            max_uncs = len(sorted_items)
+
+        if len(include_keys) == 0:
+            include_keys = [item[0] for item in sorted_items]
+            if max_uncs == len(sorted_items):
+                max_uncs = len(include_keys)
+        else:
+            max_uncs = len(include_keys)
+
+        unc_colors = plotters.get_colors('gist_rainbow', max_uncs + 1)
+        n_ct_bins = binning2d.n_costheta_bins
+
+        if fig is None and axs is None:
+            nrows = int(np.ceil(n_ct_bins / ncols))
+            fig, axs = plt.subplots(figsize=(12, 8), nrows=nrows, ncols=ncols)
+        if not isinstance(axs, np.ndarray):
+            axs = np.array([axs])
+        axs_flat = axs.flatten()
+        if len(axs_flat) < n_ct_bins:
+            raise ValueError(
+                f'Not enough axes for costheta bins: need {n_ct_bins}, got {len(axs_flat)}'
+            )
+
+        if base_key == 'event':
+            default_cv = self.sel + self.sel_background
+        elif base_key == 'xsec':
+            default_cv = self.sigma_tilde
+        else:
+            raise ValueError(f'Invalid base key: {base_key}')
+
+        cnt = 0
+        for i, (sys_name, sys_dict) in enumerate(sorted_items):
+            if cnt >= max_uncs:
+                break
+            if sys_name in exclude_keys or sys_name not in include_keys:
+                continue
+            sys_type = sys_dict.get('type')
+            if sys_type in exclude_types:
+                continue
+            if len(include_types) != 0 and sys_type not in include_types:
+                continue
+            if sys_dict.get('variation') in exclude_variations:
+                continue
+            if len(include_variations) != 0 and sys_dict.get('variation') not in include_variations:
+                continue
+            cnt += 1
+            c = sys_dict.get('color')
+            if c is None:
+                c = unc_colors[cnt]
+            total_unc = sys_dict.get(f'{base_key}_totalunc', 0)
+            unc = self._per_bin_event_rate_unc(sys_dict, base_key, use_fracunc, default_cv)
+            if unc is None:
+                continue
+            unc = np.asarray(unc).ravel()
+            n_expect = len(binning2d.differential_centers)
+            if len(unc) != n_expect:
+                raise ValueError(
+                    f'Per-bin unc length {len(unc)} != Binning2D.differential_centers length {n_expect}. '
+                    'Pass a Binning2D consistent with this Systematics differential binning (including keep_null).'
+                )
+            hist_dict, _ = binning2d.bin_differential_dict_binned(unc, bin_by='costheta')
+            label = f"{sys_dict['label']} ({total_unc*100:.1f}%)"
+            for ct_idx in range(n_ct_bins):
+                if ct_idx not in hist_dict:
+                    continue
+                values, mom_edges = hist_dict[ct_idx][0], hist_dict[ct_idx][1]
+                if values is None or len(values) == 0:
+                    continue
+                makeplot.plot_hist_edges(
+                    mom_edges,
+                    values,
+                    None,
+                    ax=axs_flat[ct_idx],
+                    label=label if ct_idx == 0 else None,
+                    color=c,
+                )
+
+        for ct_idx in range(n_ct_bins):
+            ct_lo = binning2d.diff_costheta_bins[ct_idx]
+            ct_hi = binning2d.diff_costheta_bins[ct_idx + 1]
+            panel_label = (
+                f'{panel_label_prefix}{ct_lo:.2f} <' + r'$\cos\theta_\mu$' + f' < {ct_hi:.2f}'
+            )
+            plotters.add_label(
+                axs_flat[ct_idx],
+                panel_label,
+                where='centerright',
+                fontsize=10,
+                color='black',
+                alpha=0.9,
+            )
+            axs_flat[ct_idx].set_xlim(0, MAX_PMOM)
+
+        max_uncs = max(1, min(max_uncs, len(axs_flat[0].get_lines())))
+
+        if use_fracunc:
+            ylabel_type = ' Uncertainty'
+        else:
+            ylabel_type = r' $\sigma$'
+        if 'xsec' in base_key:
+            ylabel_text = r'Cross Section ' + ylabel_type
+        else:
+            ylabel_text = r'Event Rate ' + ylabel_type
+
+        if axs.ndim == 2 and axs.shape[0] > 1:
+            axs[1, 0].set_ylabel(ylabel_text)
+        else:
+            axs_flat[0].set_ylabel(ylabel_text)
+
+        if axs.ndim == 2:
+            bottom_ax = axs[-1, axs.shape[1] // 2]
+        else:
+            bottom_ax = axs_flat[-1]
+        bottom_ax.set_xlabel(xlabel)
+
+        if legend:
+            # Lines and labels live on axs_flat[0]; place legend on axs[0,2] with explicit handles
+            handles, leg_labels = axs_flat[0].get_legend_handles_labels()
+            if handles:
+                ncol = int(np.ceil(max_uncs / 18))
+                axs[0, 2].legend(
+                    handles,
+                    leg_labels,
+                    ncol=ncol,
+                    loc='upper left',
+                    bbox_to_anchor=(1.02, 1.0),
+                )
+            
+
+        return [fig, axs, None]
+
     def plot_all_covariance_matrices(self, plot_dir=None, save_plots=True, progress_bar=False, suffix='', keys=None, **kwargs):
         """
         Plot all covariance matrices.
@@ -1474,7 +1874,7 @@ class Systematics:
                     raise ValueError('plot_dir is None and save_plots is True')
                 plt.close(fig)
             else:
-                plt.show(fig=fig)
+                plt.show()
             
             figs[plotkey] = [fig,ax,im]
         
@@ -1540,11 +1940,7 @@ class Systematics:
         axlabel = self.xlabel
         
         bins = self.bins
-        # Check if sys_dict[plot_key] is a list (variations) or array (stored CV)
-        # If it's a list, we need to determine which CV to use
-        # Check if there's a stored CV entry (like 'geant4_syst' or 'cosmic_data') that might be the source
-        # Get the correct CV for this systematic type
-        hist_var = self._get_cv_for_type(sys_dict.get('type'), cv_key=plot_key)
+        hist_var = self._get_cv_for_type(sys_dict.get('type'), cv_key=plot_key, sys_dict=sys_dict)
         if hist_var is not None:
             hist_var = hist_var.copy()
         else:
@@ -1609,7 +2005,7 @@ class Systematics:
                 raise ValueError('plot_dir is None and save_plots is True')
             plt.close(fig)
         else:
-            plt.show(fig=fig)
+            plt.show()
         
         figs[plot_key] = [fig,ax,None]
         
@@ -1653,9 +2049,6 @@ class Systematics:
         new_obj._genweights_sig = np.copy(self._genweights_sig)
         new_obj._genweights_sel = np.copy(self._genweights_sel)
         new_obj._genweights_sel_background = np.copy(self._genweights_sel_background)
-        
-        # Deep copy the sys_dict
-        new_obj.sys_dict = copy.deepcopy(self.sys_dict)
         
         # Deep copy the systematics dict (contains nested dicts with numpy arrays and lists)
         new_obj.systematics = copy.deepcopy(self.systematics)
@@ -1745,7 +2138,7 @@ class Systematics:
         
         # Save systematics data (folder per dict key, not name)
         metadata_keys = {'name', 'type', 'variation', 'label', 'description',
-                         'order', 'cols', 'col_names', 'rank'}
+                         'order', 'cols', 'col_names', 'rank', 'color'}
         for key, sdict in self.systematics.items():
             subfolder = key
             for k, arr_like in sdict.items():
@@ -1764,6 +2157,22 @@ class Systematics:
                 os.makedirs(f'{save_dir}/{subfolder}', exist_ok=True)
                 # Prefix filename with variable_name
                 filename_prefix = f'{self.variable_name}_'
+                # Per-systematic response matrices (2D cv or 3D stack): .npy only
+                if k in ('response', 'cv_response'):
+                    if k == 'cv_response':
+                        to_save = np.asarray(arr_like)
+                    else:
+                        if isinstance(arr_like, list):
+                            if all(x is not None for x in arr_like):
+                                to_save = np.stack([np.asarray(x) for x in arr_like])
+                            else:
+                                to_save = np.asarray(arr_like, dtype=object)
+                        else:
+                            to_save = np.asarray(arr_like)
+                    np.save(
+                        f'{save_dir}/{subfolder}/{filename_prefix}{k}.npy',
+                        to_save)
+                    continue
                 # This is a numpy array or list
                 if isinstance(arr_like, (np.ndarray, list)) and k not in ['cols', 'col_names']:
                     #Make sure the array is a numpy array
@@ -1796,8 +2205,8 @@ class Systematics:
                         
     @classmethod
     def from_saved(cls, load_dir, var_name, metadata_dir='metadata_detsys',
-                   ignore_keys=[], ignore_types=[], select_types=[], ncpus=10,
-                   lite=True, use_legacy_names=False):
+                   ignore_keys=[], ignore_types=[], select_types=[], select_keys=[],
+                   ncpus=10, lite=True, use_legacy_names=False):
         """
         Create a Systematics object from saved data.
         This is the recommended way to load saved systematics.
@@ -1818,6 +2227,8 @@ class Systematics:
             List of types to ignore
         select_types : list, optional
             List of types to select
+        select_keys : list, optional
+            If non empty, only systematic dictionary keys in this list are loaded
         ncpus : int, optional
             Number of CPUs to use for parallel processing
         lite : bool, optional
@@ -1893,6 +2304,8 @@ class Systematics:
                 return None
             if select_types != [] and val['type'] not in select_types:
                 return None
+            if select_keys != [] and key not in select_keys:
+                return None
 
             # Handle summary keys where cols might be None
             if val['cols'] is None:
@@ -1953,19 +2366,21 @@ class Systematics:
         instance._genweights_sel = np.array([])
         instance._genweights_sel_background = np.array([])
         
-        instance.sys_dict = sys_dict
         instance.systematics = {}
-        instance._initialize_systematic_dicts()
+        for key, metadata in sys_dict.items():
+            instance.add_syst(key, metadata=metadata)
         
         # Now load the systematics data
         instance.load(load_dir, ignore_keys=ignore_keys, ignore_types=ignore_types,
-                      select_types=select_types, metadata_dir=metadata_dir, lite=lite,
+                      select_types=select_types, select_keys=select_keys,
+                      metadata_dir=metadata_dir, lite=lite,
                       use_legacy_names=use_legacy_names)
         
         return instance
     
     def load(self, load_dir, ignore_keys=[], ignore_types=[], select_types=[],
-             metadata_dir='metadata_detsys', lite=True, use_legacy_names=False):
+             select_keys=[], metadata_dir='metadata_detsys', lite=True,
+             use_legacy_names=False):
         """
         Load the systematics from a directory
         Note: The systematics object must be initialized before loading.
@@ -1981,16 +2396,19 @@ class Systematics:
             List of types to ignore
         select_types : list, optional
             List of types to select
+        select_keys : list, optional
+            If non empty, only these systematic keys are loaded from disk
         metadata_dir : str, optional
             Directory to load the metadata from
         lite : bool, optional
             If True, only load the metadata and necessary systematics data.
+            Skips heavy per-systematic files (e.g. sel, sigma_tilde, response npy).
         use_legacy_names : bool, optional
             If True, match subfolders by their 'name' field (old save format
             where folders were named by sdict['name']). Default False uses
             the dict key directly.
         """
-        lite_drop_keys = ['sel','sigma_tilde','eff','cols','col_names','description']
+        lite_drop_keys = ['sel','sigma_tilde','eff','cols','col_names','description','response']
         if not self.systematics:
             raise ValueError('Systematics object must be initialized before loading. Use Systematics.from_saved() instead.')
         
@@ -2013,12 +2431,17 @@ class Systematics:
                 sys_key = subfolder
             else:
                 sys_key = subfolder
+                if select_keys != [] and sys_key not in select_keys:
+                    continue
                 self.systematics[sys_key] = Systematics._get_dict_template().copy()
                 self.systematics[sys_key]['name'] = subfolder
                 self.systematics[sys_key]['label'] = subfolder
                 self.systematics[sys_key]['description'] = ''
                 self.systematics[sys_key]['order'] = None
-            
+
+            if select_keys != [] and sys_key not in select_keys:
+                self.systematics.pop(sys_key, None)
+                continue
 
             if self.systematics[sys_key]['type'] in ignore_types or (select_types != [] and self.systematics[sys_key]['type'] not in select_types):
                 self.systematics.pop(sys_key)
@@ -2037,7 +2460,11 @@ class Systematics:
                     continue
                     
                 # Remove extension and variable_name prefix
-                key_name = file.replace('.csv', '').replace('.txt', '')
+                key_name = file
+                for _suf in ('.csv', '.txt', '.npy'):
+                    if key_name.endswith(_suf):
+                        key_name = key_name[: -len(_suf)]
+                        break
                 # Strip variable_name prefix (should always match at this point)
                 if key_name.startswith(filename_prefix):
                     key_name = key_name[len(filename_prefix):]
@@ -2079,6 +2506,9 @@ class Systematics:
                                 # If conversion fails, keep as string
                                 arr_like = value
                     self.systematics[sys_key][key_name] = arr_like
+                elif file.endswith('.npy'):
+                    self.systematics[sys_key][key_name] = np.load(
+                        file_path, allow_pickle=True)
                 else:
                     #raise ValueError(f'File {file} has unknown extension, only .csv and .txt are supported')
                     continue

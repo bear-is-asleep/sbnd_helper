@@ -306,7 +306,7 @@ class CAF:
                     if isinstance(univ_df.columns, pd.MultiIndex):
                         mask = []
                         for col in univ_df.columns:
-                            col_str = '.'.join(str(level) for level in col if level)
+                            col_str = utils.col_tuple_to_key(col)
                             mask.append(any(pattern in col_str for pattern in keep_patterns))
                         univ_df = univ_df.loc[:, mask]
                     else:

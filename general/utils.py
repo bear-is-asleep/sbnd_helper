@@ -15,11 +15,12 @@ import subprocess
 import h5py
 from .h5filemanager import H5FileManager
 
-def get_chi2_dof_pval_str(chi2,dof,pval,round_to=10):
+def get_chi2_dof_pval_str(chi2,dof,pval,round_to=10,diag=False):
   chi2 = round(chi2,round_to)
   chi2 = format_number_with_suffix(chi2,assert_greater_than_1=chi2 > 1)
   dof = int(dof)
-  return r'$\chi^2$/dof = ' + f'{chi2}/{dof}, p = {pval:.2f}'
+  prefix = r'1D $\chi^2$' if diag else r'$\chi^2$'
+  return prefix + f'/dof = {chi2}/{dof}, p = {pval:.2f}'
 
 def get_scientific_str(num, round_to=5):
   if num == 0:
@@ -64,6 +65,9 @@ def read_hdf_xrootd(path, key=None, **kwargs):
             return pd.read_hdf(local_path, key=key, **kwargs)
         else:
             return pd.read_hdf(local_path, **kwargs)
+
+def col_tuple_to_key(col):
+    return '.'.join(str(level) for level in col if level)
 
 @contextmanager
 def xrootd_file(xrootd_path, cleanup=True, verbose=False):
