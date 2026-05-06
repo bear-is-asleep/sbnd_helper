@@ -31,6 +31,31 @@ NOT_FV_HIGH_Z = [
   [250,450],#z
 ]
 
+TPC0 = [
+  [-200,0],#x
+  [-200,200],#y
+  [0,500],#z
+]
+
+TPC1 = [
+  [0,200],#x
+  [-200,200],#y
+  [0,500],#z
+]
+
+TPC0_BUFFER = [
+  [-195,0],#x
+  [-195,195],#y
+  [5,495],#z
+]
+TPC1_BUFFER = [
+  [0,195],#x
+  [-195,195],#y
+  [5,495],#z
+]
+
+F_SCALE = 0.0725 #https://sbn-docdb.fnal.gov/cgi-bin/sso/RetrieveFile?docid=41013&filename=2025-05-08_Absolute-Normalization-Data-MC.pdf&version=4
+
 #SBND volume
 FACE_AREA = 400**2 #cm^2
 SBND_THICKNESS = 500 #cm

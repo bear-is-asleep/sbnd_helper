@@ -9,6 +9,7 @@ import uproot
 import matplotlib.pyplot as plt
 from sbnd.general import plotters
 from sbnd.plotlibrary import makeplot
+from scipy.stats import norm
 
 RETAINED_VARIANCE_TOL=0.9999
 PINV_RCOND=1e-4
@@ -57,6 +58,14 @@ class XSec:
             variable_label = 'Bin ID'
             self.unit = r'cm$^{2}$ GeV$^{-1}$ nucleon$^{-1}$'
             self.xsec_label = r'$\frac{d^2\sigma}{dp_\mu d\cos\theta_\mu}$' + f'[{self.yscale_str}' + self.unit + ']'
+        elif variable == 'overall':
+            variable_label = 'Overall'
+            self.unit = r'cm$^{2}$ nucleon$^{-1}$'
+            self.xsec_label = r'$\sigma$ ' + f'[{self.yscale_str}' + self.unit + ']'
+            self.regularized_label = 'All Events'
+            self.true_label = 'True All Events'
+            self.reco_label = 'Reconstructed All Events'
+            return
         else:
             raise ValueError(f'Variable {variable} not supported')
         self.regularized_label = 'Regularized ' + variable_label
@@ -98,10 +107,12 @@ class XSec:
             'C_type': None,
             'Norm_type': None,
             'fractional_cov': None,
+            'input_stat_cov': None,
             'input_cov': None,
             'input_cov_norm': None,
             'input_cov_shape': None,
             'unfold_cov': None,
+            'unfold_stat_cov': None,
             'unfold_fraccov': None,
             'unfold_corr': None,
             'unfold_cov_norm': None,
@@ -263,9 +274,11 @@ class XSec:
             'Norm_type': Norm_type,
             'fractional_cov': fractional_cov,
             'input_cov': input_cov,
+            'input_stat_cov': stat_cov,
             'input_cov_norm': input_cov_norm,
             'input_cov_shape': input_cov_shape,
             'unfold_cov': unfold_cov,
+            'unfold_stat_cov': stat_cov_rotated,
             'unfold_fraccov': unfold_fraccov,
             'unfold_corr': unfold_corr,
             'unfold_cov_norm': unfold_cov_norm,
@@ -285,8 +298,10 @@ class XSec:
             'chi2': chi2,
             'dof': dof,
             'pval': pval,
+            'sigma': norm.isf(pval),
             'chi2_1d': chi2_1d,
             'pval_1d': pval_1d,
+            'sigma_1d': norm.isf(pval_1d),
             'chi2_1d_str': chi2_1d_str,
             'chi2_dof_pval_str': chi2_dof_pval_str,
             'sig_smear_bw': sig_smear_bw,
@@ -371,7 +386,7 @@ class XSec:
                 sel_sig_reco=sel_sig_reco,
                 sel_sig_truth=sel_sig_truth,
                 genweights_sel_sig=genweights_sel_sig,
-                bins=bins,
+                bins=np.array(bins),
             )
         core = self._compute_wiener(
             cov=cov,

@@ -149,6 +149,16 @@ class NU(CAF):
     Cut to only contained
     """
     self.apply_cut('cut.cont', self.data.mu.is_contained == 1, cut=cut)
+  def cut_all(self,cut=True,cont=False):
+    """
+    Cut to all cuts
+    """
+    condition = self.data.cut.fv\
+      & self.data.cut.cosmic\
+      & self.data.cut.muon
+    if cont:
+      condition &= self.data.cut.cont
+    self.apply_cut('cut.all', condition, cut=cut)
   def assign_prism_bins(self,prism_bins=None):
     """
     Assign prism bins to dataframe

@@ -300,11 +300,11 @@ class Systematics:
             return key
         def assign_type(key,stype='RW'):
             if stype == 'RW':
-                if 'genie' in key.lower() or 'sbnnusyst' in key.lower() or 'susav2' in key.lower():
+                if 'genie' in key.lower() or 'sbnnusyst' in key.lower() or 'susav2' in key.lower() or 'xsec' in key.lower():
                     return 'xsec'
                 elif 'flux' in key.lower():
                     return 'flux'
-                elif 'geant4' in key.lower():
+                elif 'geant4' in key.lower() or 'g4' in key.lower():
                     return 'g4'
                 elif 'stat' in key.lower():
                     return 'stat'
@@ -823,7 +823,6 @@ class Systematics:
                 sys_dict['xsec_totalunc'] = None
             if 'cosmic' in key and compute_xsec_cov:
                 #Special treatment for cosmic uncertainty, just use the event uncertainty, scaled by xsec unit
-                print(f'sel_background: {self.sel_background}, sel: {self.sel}, xsec_unit: {self.xsec_unit}')
                 sys_dict['xsec_cov'] = covariance_from_fraccov(
                     sys_dict['event_fraccov'], (self.sel_background + self.sel) * self.xsec_unit
                 )
@@ -1164,14 +1163,16 @@ class Systematics:
 
         # Sum covariance matrices (event and xsec cov rescaled to selected scale so different-scale
         # systematics combine correctly)
+        keys_used_in_total = []# Track keys used in total
         target_cv = self.sel + self.sel_background
         target_xsec_cv = self.sigma_tilde
         for key, sys_dict in self.systematics.items():
             if sys_dict['variation'] == 'summary' or sys_dict['variation'] == 'self':
                 continue
-
             for sk in summary_keys:
                 if (sys_dict['type'] == sk) or (sk == 'total'):
+                    if sk == 'total':
+                        keys_used_in_total.append(key)
                     if sys_dict['event_fraccov'] is not None:
                         self.systematics[sk]['event_fraccov'] += sys_dict['event_fraccov']
                     if sys_dict['event_cov'] is not None:
@@ -1180,7 +1181,6 @@ class Systematics:
                         self.systematics[sk]['event_cov_unaltered'] += sys_dict['event_cov_unaltered']
                     if sys_dict['xsec_fraccov'] is not None:
                         if self.systematics[sk]['xsec_fraccov'] is None:
-                            print(self.systematics)
                             raise ValueError(f'xsec_fraccov is None for {sk}')
                         self.systematics[sk]['xsec_fraccov'] += sys_dict['xsec_fraccov']
                     if sys_dict['xsec_cov'] is not None:
@@ -1227,7 +1227,8 @@ class Systematics:
                 self.systematics[sk]['xsec_totalunc'] = get_total_unc(
                     xsec_cv, self.systematics[sk]['xsec_fracunc']
                 )
-    
+        assert len(keys_used_in_total) == len(set(keys_used_in_total)), f'Keys used in total are not unique: {keys_used_in_total}'
+        print(f' -> [combine_summaries] Keys used in total: {set(keys_used_in_total)}')
     def generate_description_template(self, save_dir=None, descriptions_path=None,
                                        exclude_keys=None, include_keys=None,
                                        key_order=None):

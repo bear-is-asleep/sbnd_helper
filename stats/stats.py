@@ -242,7 +242,8 @@ def get_smear_matrix(true_var, reco_var, bins, weights=None):
     """
     if len(true_var) != len(reco_var) != len(weights):
       raise ValueError(f'True, reco, and weights must have the same length: {len(true_var)}, {len(reco_var)}, {len(weights)}')
-    reco_vs_true, _, _ = np.histogram2d(true_var, reco_var, bins=bins, weights=weights)
+    bins2d = [bins,bins]
+    reco_vs_true, _, _ = np.histogram2d(true_var, reco_var, bins=bins2d, weights=weights)
     return reco_vs_true
 
 
@@ -323,101 +324,6 @@ def get_response_matrix(sig_truth, sel_truth, sel_sig_reco, sel_sig_truth, genwe
   smearing = get_smear_matrix(sel_sig_truth, sel_sig_reco, bins, weights=genweights_sel_sig)
   response = convert_smearing_to_response(smearing, eff_truth)
   return response
-
-def shrink_covariance_oasd(S, n=None, mean_known=False):
-    """
-    Oracle Approximating Shrinkage with Diagonal target (OASD) estimator.
-    
-    Shrinks a sample covariance matrix toward its diagonal to improve estimation
-    in high-dimensional settings (p > n). This method is particularly useful when
-    the diagonal elements of the true covariance matrix exhibit substantial variation.
-    
-    Based on: "Oracle Approximating Shrinkage with Diagonal Target" paper.
-    https://www.elibrary.imf.org/view/journals/001/2023/257/article-A001-en.xml#:~:text=We%20use%20a%20simulation%20to,Sch%C3%A4fer%20and%20Strimmer%20(2005).
-
-    Parameters
-    ----------
-    S : array_like, shape (p, p)
-        Sample covariance matrix
-    n : int, optional
-        Sample size. If None, inferred from S (assumes n-1 degrees of freedom)
-    mean_known : bool, default False
-        Whether the mean is known. If True, uses n+1 in denominator (Theorem 3).
-        If False, uses n in denominator (Theorem 2, general case).
-    
-    Returns
-    -------
-    S_shrunk : ndarray, shape (p, p)
-        Shrunk covariance matrix: (1 - rho)*S + rho*diag(S)
-    rho : float
-        Shrinkage parameter (between 0 and 1)
-    phi : float
-        The phi parameter used in the calculation
-    
-    Notes
-    -----
-    The shrinkage estimator is:
-        S_OASD = (1 - rho)*S + rho*diag(S)
-    
-    where rho is computed as:
-        rho_OASD = min(1/(n*phi), 1)  [mean unknown, general case]
-        rho_OASD = min(1/((n+1)*phi), 1)  [mean known, special case]
-    
-    and phi is:
-        phi = (tr(S^2) - tr(diag(S)^2)) / (tr(S^2) + tr(S)^2 - 2*tr(diag(S)^2))
-    
-    The resulting matrix is guaranteed to be positive definite.
-    """
-    S = np.asarray(S, dtype=float)
-    
-    if S.ndim != 2 or S.shape[0] != S.shape[1]:
-        raise ValueError("S must be a square matrix")
-    
-    p = S.shape[0]
-    
-    # Infer n if not provided (assumes n-1 degrees of freedom in sample covariance)
-    if n is None:
-        # This is a heuristic - in practice, n should be provided
-        # We can't reliably infer it from S alone
-        raise ValueError("n (sample size) must be provided")
-    
-    # Compute diagonal matrix
-    diag_S = np.diag(np.diag(S))
-    
-    # Compute traces needed for phi
-    tr_S2 = np.trace(S @ S)  # tr(S^2)
-    tr_S = np.trace(S)  # tr(S)
-    tr_diag_S2 = np.trace(diag_S @ diag_S)  # tr(diag(S)^2)
-    
-    # Compute phi parameter (equation 7)
-    numerator = tr_S2 - tr_diag_S2
-    denominator = tr_S2 + tr_S**2 - 2*tr_diag_S2
-    
-    if denominator == 0:
-        # Edge case: if denominator is zero, set phi to a small value
-        phi = 1e-10
-    else:
-        phi = numerator / denominator
-    
-    # Ensure phi is in valid range [0, 1)
-    phi = np.clip(phi, 0.0, 1.0 - 1e-10)
-    
-    # Compute shrinkage parameter rho (equation 11 for general case, 16 for known mean)
-    if mean_known:
-        rho = min(1.0 / ((n + 1) * phi), 1.0)
-    else:
-        rho = min(1.0 / (n * phi), 1.0)
-    
-    # Ensure rho is in (0, 1]
-    rho = np.clip(rho, 1e-10, 1.0)
-    
-    # Apply shrinkage (equation 12 or 17)
-    S_shrunk = (1.0 - rho) * S + rho * diag_S
-    
-    # Ensure result is symmetric (should be by construction, but just in case)
-    S_shrunk = (S_shrunk + S_shrunk.T) / 2.0
-    
-    return S_shrunk, rho, phi
 
 def _cov_eigenvalue_diagnostics(cov):
     """Eigenvalues and condition number for a covariance matrix. Use to check ill-conditioning."""
@@ -588,9 +494,8 @@ def tikhonov_regularize_cov(cov, retained_variance_tol=0.999, diagnose=False):
 
     return cov_reg, s_opt
 
-
 def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, diagnose=False, filter_min=-np.inf, rank=None,
-    retained_variance_tol=0.9999,mask_bins=None):
+    retained_variance_tol=0.9999,mask_bins=None,dof_minus_one=False):
     """
     Calculate the chi2 between two arrays using a covariance matrix.
 
@@ -620,6 +525,8 @@ def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, 
         Rank of the covariance matrix. If None, use the full rank.
     mask_bins : array_like, optional
         Indices of bins to include in the chi2 calculation. If None, use all bins.
+    dof_minus_one : bool, default False
+        If True, subtract 1 from the degrees of freedom.
     Returns
     -------
     chi2 : float
@@ -645,7 +552,7 @@ def calc_chi2(pred, true, cov, n=None, apply_shrinkage=False, pinv_rcond=1e-12, 
       print(f'- Dropping {len(valid)-valid.sum()} bins with pred or true values less than {filter_min}')
     
     diff = true - pred
-    dof = len(pred) - 1
+    dof = len(pred) - (1 if dof_minus_one else 0)
     
     if cov.ndim == 1:
         # Diagonal covariance (just variances)

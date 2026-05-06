@@ -2,6 +2,7 @@ from sbnd.general import utils
 from pyanalib import pandas_helpers
 from .particlegroup import ParticleGroup
 from sbnd.detector.volume import *
+from sbnd.detector.definitions import *
 from sbnd.constants import *
 from sbnd.general.utils import read_hdf_xrootd
 import numpy as np
@@ -183,11 +184,17 @@ class CAFSlice(ParticleGroup):
         return
       self.apply_cut('cut.all', condition, cut)
     #-------------------- adders --------------------#
-    def add_track_flipping(self,suffix=""):
+    def add_isbroken(self):
+      """
+      Add is broken boolean. True if the track is broken into two or more tracks
+      """
+      pass
+      
+    def add_track_flipping(self,suffix="",method='direction'):
       """
       Add track flipping boolean. True if start and end are correctly matched
       """
-      return super().add_track_flipping('pandora',suffix=suffix)
+      return super().add_track_flipping('pandora',suffix=suffix,method=method)
     def add_has_muon(self,suffix=""):
       """
       Check if there is a muon
@@ -199,6 +206,23 @@ class CAFSlice(ParticleGroup):
       #Get slices with muons
       mask = (self.data.loc[:,col] == True).values.flatten()
       self.add_cols(keys,mask,fill=False)
+    def add_tpc_containment(self):
+      """
+      Add tpc containment boolean. True if the track is contained in the TPC
+      """
+      #Set keys, conditions, and values for add_col method
+      keys = [
+        'mu.pfp.trk.cont_tpc0',
+        'mu.pfp.trk.cont_tpc1',
+        # Truth values require g4 information (i don't think we have it in current files)
+      ]
+      conditions = [
+        (involume(self.data.mu.pfp.trk.start,volume=TPC0) & involume(self.data.mu.pfp.trk.end,volume=TPC0)),
+        (involume(self.data.mu.pfp.trk.start,volume=TPC1) & involume(self.data.mu.pfp.trk.end,volume=TPC1)),
+
+      ]
+      values = [True,True]
+      self.add_cols(keys,values,conditions=conditions,fill=False)
     def add_2d_binning(self, costheta_bins=None, momentum_bins=None, momentum_bins_2d=None,
                               include_truth=True, include_reco=True):
       """
@@ -296,7 +320,7 @@ class CAFSlice(ParticleGroup):
       ]
       self.add_cols(keys,values,fill=False) 
    
-    def add_event_type(self,min_ke=0.1,suffix=""):
+    def add_event_type(self,min_ke=0.1,max_ke=0.8,suffix=""):
       """
       Add event type from genie type map. True event type
 
@@ -304,6 +328,8 @@ class CAFSlice(ParticleGroup):
       ----------
       min_ke : float
         Minimum kinetic energy to be considered a muon [GeV]
+      max_ke : float
+        Maximum kinetic energy to be considered a muon [GeV]
       """
       iscc = self.data.slc.truth.iscc == 1
       isnumu = self.data.slc.truth.pdg == 14

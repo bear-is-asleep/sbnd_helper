@@ -10,8 +10,8 @@ THETA_BINS = np.arccos(COSTHETA_BINS)*180/np.pi
 THETA_BIN_LABELS = [f'{THETA_BINS[i]:.2f} - {THETA_BINS[i+1]:.2f}' for i in range(len(THETA_BINS)-1)]
 THETA_CENTERS = (THETA_BINS[:-1] + THETA_BINS[1:])/2.
 
-MOMENTUM_BINS = np.array([0,0.3,0.4,0.5,0.65,0.8,1.,1.4,1e10])
-#MOMENTUM_BINS = np.concatenate([np.arange(0,3.1,0.1),[1e10]])
+#MOMENTUM_BINS = np.array([0,0.3,0.4,0.5,0.65,0.8,1.,1.4,1e10]) # Uncontained
+MOMENTUM_BINS = np.array([0,0.2,0.25,0.3,0.4,0.5,0.6,0.7,0.8,1e10]) # Contained
 MOMENTUM_BIN_LABELS = [f'{MOMENTUM_BINS[i]:.2f} - {MOMENTUM_BINS[i+1]:.2f}' if i < len(MOMENTUM_BINS)-2 else f'> {MOMENTUM_BINS[i]:.2f}' for i in range(len(MOMENTUM_BINS)-1)]
 MOMENTUM_CENTERS = (MOMENTUM_BINS[:-1] + MOMENTUM_BINS[1:])/2.
 
@@ -26,19 +26,31 @@ DIFF_THETA_BIN_LABELS = [f'{DIFF_THETA_BINS[i]:.2f} - {DIFF_THETA_BINS[i+1]:.2f}
 DIFF_THETA_CENTERS = (DIFF_THETA_BINS[:-1] + DIFF_THETA_BINS[1:])/2.
 
 #Maximum display momentum, rest is overflow. Use this for xsec
-MAX_PMOM = 2.
+#MAX_PMOM = 2. #Uncontained
+MAX_PMOM = 1. #Contained
 
 # Default 2D momentum grid: one row per costheta bin
-DIFF_MOMENTUM_BINS_2D = np.array([
-  [0,0.2,0.3,0.4,1e10],
-  [0,0.3,0.4,0.6,1e10],
-  [0,0.3,0.4,0.6,1e10],
+# DIFF_MOMENTUM_BINS_2D = np.array([ # Uncontained
+#   [0,0.2,0.3,0.4,1e10],
+#   [0,0.3,0.4,0.6,1e10],
+#   [0,0.3,0.4,0.6,1e10],
+#   [0,0.4,0.6,0.8,1e10],
+#   [0,0.4,0.6,0.8,1e10],
+#   [0,0.4,0.6,0.8,1e10],
+#   [0,0.6,1.,1.4,1e10],
+#   [0,0.6,1.,1.4,1e10],
+#   [0,0.6,1.,1.4,1e10],
+#   ])
+DIFF_MOMENTUM_BINS_2D = np.array([ # Contained
+  [0,0.25,0.3,0.4,1e10],
+  [0,0.25,0.3,0.4,1e10],
+  [0,0.25,0.3,0.4,1e10],
+  [0,0.3,0.5,0.7,1e10],
+  [0,0.3,0.5,0.7,1e10],
+  [0,0.3,0.5,0.7,1e10],
   [0,0.4,0.6,0.8,1e10],
   [0,0.4,0.6,0.8,1e10],
   [0,0.4,0.6,0.8,1e10],
-  [0,0.6,1.,1.4,1e10],
-  [0,0.6,1.,1.4,1e10],
-  [0,0.6,1.,1.4,1e10],
   ])
 N_DIFF_MOMENTUM_BINS_2D = DIFF_MOMENTUM_BINS_2D.shape[1]
 

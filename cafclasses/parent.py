@@ -551,9 +551,10 @@ class CAF:
           raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
       print(f'--scaling to POT ({nom_pot/sample_pot:.2e}): {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
-    def scale_to_livetime(self,nom_livetime,sample_livetime=None,overwrite=False):
+    def scale_to_livetime(self,nom_livetime,sample_livetime=None,overwrite=False,f=0.):
       """
       Scale to nominal livetime. Need sample livetime as input
+      f is the neutrino gate fraction in the intime cosmics sample. Only use for data.
       """
       assert sample_livetime is not None, 'sample livetime is None'
       if sample_livetime == nom_livetime: print('WARNING: sample livetime is equal to nominal livetime')
@@ -565,9 +566,12 @@ class CAF:
       elif not overwrite:
         if not np.all(self.data.genweight == 1.):
           raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
-      print(f'--scaling to livetime ({nom_livetime/sample_livetime:.2e}): {sample_livetime:.2e} --> {nom_livetime:.2e}')
-      self.data.genweight = self.data.genweight*nom_livetime/sample_livetime
-      self.livetime = nom_livetime
+      scale_factor = nom_livetime*(1.-f)/sample_livetime
+      print(f'--scaling to livetime ({scale_factor:.2e}): {sample_livetime:.2e} --> {nom_livetime:.2e}')
+      if f > 0:
+        print(f'---scale factor without f: {nom_livetime/sample_livetime:.4e}')
+        print(f'--- f: {f:.4f}')
+      self.data.genweight = self.data.genweight*scale_factor
     def scale_to_prism_coeff(self,prism_coeff):
       """
       First set the prism binnings of events, then scale to the prism coefficient.

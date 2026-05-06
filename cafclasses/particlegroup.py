@@ -14,7 +14,7 @@ class ParticleGroup(CAF):
     #-------------------- cutters --------------------#
     #-------------------- assigners --------------------#
     #-------------------- adders --------------------#
-    def add_track_flipping(self,algo,suffix=""):
+    def add_track_flipping(self,algo,suffix="",method='direction'):
         """
         Add track flipping boolean. True if start and end are correctly matched
 
@@ -22,6 +22,8 @@ class ParticleGroup(CAF):
         ----------
         algo: str
           Algorithm to use for event type. Either 'pandora' or 'spine'
+        method: str
+          Method to use for track flipping. Either 'point' or 'direction'
         """
         def _get_vector(prefix):
             axes = ['x','y','z']
@@ -32,20 +34,32 @@ class ParticleGroup(CAF):
             start = _get_vector(f'mu{suffix}.pfp.trk.start')
             true_start = _get_vector(f'mu{suffix}.pfp.trk.truth.p.start')
             true_end = _get_vector(f'mu{suffix}.pfp.trk.truth.p.end')
+            direction = _get_vector(f'mu{suffix}.pfp.trk.dir')
+            true_direction = _get_vector(f'mu{suffix}.pfp.trk.truth.p.dir')
             keys = [f'mu.pfp.trk.is_flipped']
         elif algo == 'spine':
             start = _get_vector(f'mu{suffix}.start_point')
             true_start = _get_vector(f'mu{suffix}.tpart.start_point')
             true_end = _get_vector(f'mu{suffix}.tpart.end_point')
+            direction = _get_vector(f'mu{suffix}.tpart.dir')
+            true_direction = _get_vector(f'mu{suffix}.tpart.truth.p.dir')
             keys = [f'mu.is_flipped']
         else:
             raise ValueError(f'Invalid algo: {algo}')
-        #Find distance between start and true start
-        diff_s2s = np.linalg.norm(start-true_start,axis=1)
-        diff_s2e = np.linalg.norm(start-true_end,axis=1)
-
+        if method == 'point':
+            #Find distance between start and true start
+            diff_s2s = np.linalg.norm(start-true_start,axis=1)
+            diff_s2e = np.linalg.norm(start-true_end,axis=1)
+            values = np.array(diff_s2s > diff_s2e).astype(np.float64)
+        elif method == 'direction':
+            # Find the dot product between direction and true direction
+            # If the dot product is negative, the direction is flipped
+            dot_product = np.einsum('ij,ij->i', direction, true_direction)
+            values = (dot_product < 0.0).astype(np.float64)
+        else:
+            raise ValueError(f'Invalid method: {method}')
         #Set keys, values, and conditions
-        self.add_cols(keys,[np.array(diff_s2s > diff_s2e).astype(np.float64)])
+        self.add_cols(keys,values)
     def add_stat_unc(self, nuniv=100, progress_bar=False, seed=69):
         """
         Add statistical uncertainty to the dataframe.
@@ -245,7 +259,8 @@ class ParticleGroup(CAF):
         assert isinstance(cuts,list), 'cuts must be a list'
         assert isinstance(cuts[0],str), 'cuts must be a list of strings'
         for i,cut in enumerate(cuts):
-            partgrp_cut_df = partgrp_cut_df[partgrp_cut_df.cut[cut]] #apply cut
+            if cut != 'precut':
+                partgrp_cut_df = partgrp_cut_df[partgrp_cut_df.cut[cut]] #apply cut
             # Find indices of partgrp_cut_df that are in mcnu_df
             partgrp_inds = partgrp_cut_df.index.drop_duplicates()
             mcnu_inds = mcnu_df.index.drop_duplicates()

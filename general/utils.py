@@ -20,7 +20,7 @@ def get_chi2_dof_pval_str(chi2,dof,pval,round_to=10,diag=False):
   chi2 = format_number_with_suffix(chi2,assert_greater_than_1=chi2 > 1)
   dof = int(dof)
   prefix = r'1D $\chi^2$' if diag else r'$\chi^2$'
-  return prefix + f'/dof = {chi2}/{dof}, p = {pval:.2f}'
+  return prefix + f'/dof = {chi2}/{dof}, p = {pval:.3f}'
 
 def get_scientific_str(num, round_to=5):
   if num == 0:

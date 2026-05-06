@@ -13,7 +13,7 @@ from sbnd.plotlibrary import makeplot
 from sbnd.stats import stats
 from sbnd.general import plotters
 from sbnd.general import utils
-def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=20,cut='',savename=''
+def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',title=None,label='',colors=None,weights=None,bins=20,cut='',savename=''
                 ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ax=None,fig=None,cov=None,data_label=None,**kwargs):
     """
     Create a histogram from a list of series each corresponding
@@ -44,6 +44,8 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         Label of the plot.
     xlabel : str, optional
         Label of the x-axis.
+    title : str, optional
+        Title of the plot.
     colors : list of str, optional
         List of colors, each corresponding to a different true event type.
     weights : list of float, optional
@@ -101,7 +103,7 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
       _min = np.min(_mins)
       _max = np.max(_maxs)
       bins = np.linspace(_min,_max,bins+1)
-    fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,colors=colors,weights=weights,return_counts=True
+    fig,ax,counts,n_perbin = plot_hist(series,labels,xlabel=xlabel,title=title,colors=colors,weights=weights,return_counts=True
                    ,histtype=histtype,lw=2,bins=bins,alpha=alpha,density=(dens is True),stack_fraction=stackfrac,show_counts=show_counts,show_pcts=show_pcts,ax=ax,fig=fig,filter_nan=True,**kwargs)
     if stackfrac:
         yerr_arr = None
@@ -146,6 +148,8 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
         ax.set_ylabel('Density')
     elif stackfrac:
         ax.set_ylabel('Fraction')
+    elif scale_data:
+      ax.set_ylabel('Normalized Candidates')
     else:
         ax.set_ylabel('Candidates')
     if stackfrac:
@@ -159,7 +163,8 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
           label_y_shift = 0
         ax.set_ylim(0,y_lim[1])
     #Add labels
-    plotters.add_label(ax,pot_label,where='toprightoutside',color='gray',alpha=1.,fontsize=12)
+    plotters.add_label(ax,pot_label,where=(1.0,1.07+label_y_shift) if '\n' not in label else (0.01,1.15+label_y_shift)
+      ,color='gray',alpha=1.,fontsize=12,horizontalalignment='right',verticalalignment='top')
     plotters.add_label(ax,label,where=(0.01,1.07+label_y_shift) if '\n' not in label else (0.01,1.15+label_y_shift)
       ,color='gray',alpha=0.9,fontsize=10,horizontalalignment='left',verticalalignment='top')
     plotters.add_label(ax,stat_label,where='bottomrightoutside',fontsize=10)
@@ -235,6 +240,9 @@ def create_differential_stack(
     savename='',
     plot_dir=None,
     close=True,
+    scale_data=False,
+    show_counts=False,
+    show_pcts=True,
     **kwargs,
 ):
   """
@@ -265,6 +273,12 @@ def create_differential_stack(
   **kwargs
       Passed to ``create_hist``. Use ``dens='stackfrac'`` for per-bin composition (no data overlay,
       no ``frac_unc`` hatch, y axis 0 to 1).
+  show_counts : bool, optional
+      If True, include per-component counts in legend labels drawn by ``create_hist``.
+  show_pcts : bool, optional
+      If True, include per-component percentages in legend labels drawn by ``create_hist``.
+  scale_data : bool, optional
+      If True, scale panel data overlays to the MC normalization.
   """
 
   if binning2d is None:
@@ -342,25 +356,32 @@ def create_differential_stack(
     )
     chi2_str = utils.get_chi2_dof_pval_str(chi2, dof, pval)
 
-  # Global data legend label (so it shows up even when show_counts=False)
+  # Global data legend label
   if data_ids is not None:
     data_total = utils.format_number_with_suffix(len(data_ids))
-    if chi2_str is not None:
-      data_label = f'Data ({data_total})\n({chi2_str})'
-    else:
+    if show_counts:
       data_label = f'Data ({data_total})'
+    else:
+      data_label = 'Data'
+    if chi2_str is not None:
+      data_label = f'{data_label}\n({chi2_str})'
   else:
     data_label = None
 
-  # Build legend labels from global component totals
+  # Build legend labels from global component totals, honoring show_counts/show_pcts
   total_mc = comp_totals.sum()
-  if total_mc > 0:
-    legend_labels = [
-        f'{lab} ({utils.format_number_with_suffix(comp_totals[i])}, {100*comp_totals[i]/total_mc:.1f}%)'
-        for i, lab in enumerate(labels)
-    ]
+  if total_mc > 0 and (show_counts or show_pcts):
+    def _suffix(i):
+      n_str = utils.format_number_with_suffix(comp_totals[i])
+      pct = 100 * comp_totals[i] / total_mc
+      if show_counts and show_pcts:
+        return f' ({n_str}, {pct:.1f}%)'
+      if show_counts:
+        return f' ({n_str})'
+      return f' ({pct:.1f}%)'
+    legend_labels = [f'{lab}{_suffix(i)}' for i, lab in enumerate(labels)]
   else:
-    legend_labels = labels
+    legend_labels = list(labels)
 
   # Figure / axes setup
   if fig is None and axs is None:
@@ -413,6 +434,7 @@ def create_differential_stack(
         legend_labels,
         data_series=(None if _stackfrac else data_pmom),
         data_label=(None if _stackfrac else data_label),
+        scale_data=scale_data,
         weights=panel_weights,
         bins=bins,
         ax=ax,
@@ -484,7 +506,13 @@ def create_differential_stack(
   # Shared labels and plot-level labels
   # (assumes 3x3 layout; matches your earlier convention)
   axs[2, 1].set_xlabel(xlabel)
-  axs[1, 0].set_ylabel(ylabel)
+  if _stackfrac:
+    shared_ylabel = 'Fraction'
+  elif scale_data:
+    shared_ylabel = 'Normalized Candidates'
+  else:
+    shared_ylabel = ylabel
+  axs[1, 0].set_ylabel(shared_ylabel)
   plotters.add_label(
       axs[0, 2],
       pot_label,
@@ -516,7 +544,7 @@ def create_differential_stack(
 
   return fig, axs
 
-def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',label='',colors=None,weights=None,bins=None,cut='',savename=''
+def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='Stat',data_series=None,scale_data=False,cut_desc='',xlabel='',title=None,label='',colors=None,weights=None,bins=None,cut='',savename=''
                 ,plot_dir=None,stat_label='',data_events=None,dens_norm=15,return_counts=False,pot_label='',close=True,legend=True,show_counts=True,show_pcts=True,bin_centers=None,ylim=None,cov=None,show_cov=False,**kwargs):
   """
   Create a histogram from a list of series each corresponding
@@ -560,7 +588,7 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
   
   # Call create_hist to populate top panel
   fig,ax,n_perbin = create_hist(series,labels,dens=dens,yerr=yerr,frac_yerr=frac_yerr,yerr_label=yerr_label,data_series=data_series,
-                                 scale_data=scale_data,cut_desc='',xlabel='',label=label,colors=colors,weights=weights,
+                                 scale_data=scale_data,cut_desc='',xlabel='',title=title,label=label,colors=colors,weights=weights,
                                  bins=bins,cut=cut,savename='',plot_dir=None,stat_label='',data_events=data_events,
                                  dens_norm=dens_norm,return_counts=True,pot_label=pot_label,close=False,legend=legend,
                                  show_counts=show_counts,show_pcts=show_pcts,bin_centers=bin_centers,ax=ax,fig=fig,cov=cov,**kwargs)
@@ -643,10 +671,14 @@ def create_hist_dataratio(series,labels,dens=False,yerr=None,frac_yerr=True,yerr
     assert len(ylim) == 2, 'ylim must be a tuple of (min,max)'
     ax2.set_ylim(ylim[0],ylim[1])
   # Re-add labels to top axis (create_hist may have cleared xlabel)
-  if not dens:
-    ax.set_ylabel('Candidates')
-  else:
+  if dens is True:
     ax.set_ylabel('Density')
+  elif dens == 'stackfrac':
+    ax.set_ylabel('Fraction')
+  elif scale_data:
+    ax.set_ylabel('Normalized Candidates')
+  else:
+    ax.set_ylabel('Candidates')
   
   # Hide x-axis labels on top axis (only show on bottom)
   ax.tick_params(labelbottom=False)
