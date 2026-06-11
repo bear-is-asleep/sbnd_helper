@@ -6,7 +6,7 @@ from sbnd.cafclasses.object_calc import *
 from sbnd.detector.volume import *
 from sbnd.constants import *
 from .particle import Particle
-from sbnd.general.utils import read_hdf_xrootd
+from sbnd.general.utils import read_hdf_local
 
 class PFP(Particle):
   #-------------------- constructor/rep --------------------#
@@ -30,20 +30,13 @@ class PFP(Particle):
                   ,pot=self.pot)
   def load(fname,key,**kwargs):
     """
-    Load data from hdf5 file
+    Load data from hdf5 file(s). fname and key may each be a str or list of str.
+    String keys may use shell-style wildcards (*, ?, []), resolved per file.
     """
-    if isinstance(key,list):
-      for i,k in enumerate(key):
-        if i == 0:
-          thispfp = PFP(read_hdf_xrootd(fname,key=k),**kwargs)
-        else:
-          thispfp.combine(PFP(read_hdf_xrootd(fname,key=k),**kwargs))
-      return thispfp
-    elif isinstance(key,str):
-      thispfp = PFP(read_hdf_xrootd(fname,key=key),**kwargs)
-      return thispfp
-    else:
-      raise ValueError(f'Invalid key: {key}')
+    from .parent import CAF
+    return CAF._load_combined(
+      fname, key, read_hdf_local, PFP, **kwargs
+    )
   #-------------------- helpers --------------------#
   def classify_semantics(self,method='naive',threshold=0.5):
     """

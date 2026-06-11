@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 from time import time
 
 from pyanalib import pandas_helpers
@@ -14,28 +15,24 @@ class NU(CAF):
         data = super().__getitem__(item) #Series or dataframe get item
         return NU(data)
   def load(fname,key='mcnu',**kwargs):
-    if isinstance(key,list):
-      for i,k in enumerate(key):
-        if i == 0:
-          thisnu = NU(pd.read_hdf(fname,key=k,**kwargs),**kwargs)
-        else:
-          thisnu.combine(NU(pd.read_hdf(fname,key=k,**kwargs),**kwargs))
-      return thisnu
-    elif isinstance(key,str):
-      thisnu = NU(pd.read_hdf(fname,key=key,**kwargs),**kwargs)
-      return thisnu
-    else:
-      raise ValueError(f'Invalid key: {key}')
+    from sbnd.general.utils import read_hdf_local
+    return CAF._load_combined(
+      fname, key, read_hdf_local, NU, **kwargs
+    )
   def add_av(self):
     """
     Add containment 1 or 0 for interaction
     """
     keys = [
       'av',
+      'tpc0_av',
+      'tpc1_av',
     ]
     self.add_key(keys, fill=False)
     cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
     self.data.loc[:,cols[0]] = involume(self.data.position,volume=AV).astype(bool)
+    self.data.loc[:,cols[1]] = involume(self.data.position,volume=TPC0).astype(bool)
+    self.data.loc[:,cols[2]] = involume(self.data.position,volume=TPC1).astype(bool)
   def add_fv(self):
     """
     Add containment 1 or 0 for interaction in the fiducial volume
@@ -45,7 +42,7 @@ class NU(CAF):
     ]
     self.add_key(keys, fill=False)
     cols = pandas_helpers.getcolumns(keys,depth=self.key_length())
-    self.data.loc[:,cols[0]] = involume(self.data.position,volume=FV).astype(bool)
+    self.data.loc[:,cols[0]] = involume(self.data.position,volume=FV) & ~involume(self.data.position,volume=NOT_FV_HIGH_Z)
   def add_nudir(self):
     """
     add nu direction
@@ -92,8 +89,11 @@ class NU(CAF):
     else:
       raise ValueError(f'Invalid min_ke: {min_ke}')
     if algo == 'pandora':
-      col = self.get_key(f'mu{suffix}.is_pandora_contained')[0]
-      iscont = (self.data.loc[:,col] == 1) | (self.data.loc[:,col] == True) #contained, break down signal and background
+      cols = self.get_key([f'mu{suffix}.cont_tpc0', f'mu{suffix}.cont_tpc1'])
+      iscont = (
+        (self.data.loc[:, cols[0]] == 1) | (self.data.loc[:, cols[0]] == True) |
+        (self.data.loc[:, cols[1]] == 1) | (self.data.loc[:, cols[1]] == True)
+      )  # contained in either tpc0 or tpc1 (per-TPC), not full-detector is_contained
     elif algo == 'spine':
       col = self.get_key(f'mu{suffix}.is_spine_contained')[0]
       iscont = (self.data.loc[:,col] == 1) | (self.data.loc[:,col] == True) #contained, break down signal and background
@@ -149,6 +149,9 @@ class NU(CAF):
     Cut to only contained
     """
     self.apply_cut('cut.cont', self.data.mu.is_contained == 1, cut=cut)
+    # Don't cut on individual TPCs, only store the containment flags
+    self.apply_cut('cut.cont', self.data.tpc0_av == 1, cut=False)
+    self.apply_cut('cut.cont', self.data.tpc1_av == 1, cut=False)
   def cut_all(self,cut=True,cont=False):
     """
     Cut to all cuts

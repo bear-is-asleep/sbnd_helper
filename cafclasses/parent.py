@@ -8,6 +8,43 @@ from sbnd.constants import *
 from sbnd.cafclasses import object_calc
 from sbnd.general import utils
 
+
+def _caf_load_task(task):
+    fname, key, fname_idx, reader, cls, caf_kwargs, cuts, categories, filter_univ, verbose = task
+    df = reader(fname, key, **caf_kwargs)
+    if filter_univ:
+        df = filter_univ_columns(df)
+    chunk = cls(df, duplicate_ok=True, **caf_kwargs)
+    if cuts is not None:
+        chunk.apply_cut_chain(cuts, verbose=verbose)
+    if categories is not None:
+        chunk.apply_categories(categories, verbose=verbose)
+    return fname_idx, chunk
+
+
+def _concat_caf_chunks(chunks, cls, caf_kwargs):
+    """Concat loaded CAF chunks in one pass with per-file __ntuple offsets."""
+    if not chunks:
+        raise ValueError('No chunks to combine')
+    if len(chunks) == 1:
+        return chunks[0][1]
+
+    dfs = []
+    pot = None
+    livetime = None
+    for file_idx, chunk in chunks:
+        dfs.append(utils.offset_ntuple_index(chunk.data, file_idx))
+        if chunk.pot is not None:
+            pot = chunk.pot if pot is None else pot + chunk.pot
+        if chunk.livetime is not None:
+            livetime = chunk.livetime if livetime is None else livetime + chunk.livetime
+
+    combined = pd.concat(dfs, axis=0)
+    init_kwargs = dict(caf_kwargs)
+    init_kwargs.setdefault('duplicate_ok', True)
+    return cls(combined, pot=pot, livetime=livetime, **init_kwargs)
+
+
 def filter_univ_columns(df):
     """
     Filter out columns that contain 'univ' in any level of the MultiIndex column name.
@@ -123,19 +160,52 @@ class CAF:
       self.data.sort_index(inplace=True)
     def copy(self,deep=True,duplicate_ok=False):
       return CAF(self.data.copy(deep),pot=self.pot,duplicate_ok=duplicate_ok)
-    def load(fname,key,**kwargs):
-      if isinstance(key,list):
-        for i,k in enumerate(key):
-          if i == 0:
-            thiscaf = CAF(pd.read_hdf(fname,key=k,**kwargs),**kwargs)
-          else:
-            thiscaf.combine(CAF(pd.read_hdf(fname,key=k,**kwargs),**kwargs))
-        return thiscaf
-      elif isinstance(key,str):
-        thiscaf = CAF(pd.read_hdf(fname,key=key,**kwargs),**kwargs)
-        return thiscaf
-      else:
-        raise ValueError(f'Invalid key: {key}')
+    @staticmethod
+    def _load_combined(fnames, keys, reader, cls, **kwargs):
+      ncpu = kwargs.pop('ncpu', 1)
+      verbose = kwargs.pop('verbose', kwargs.pop('show_progress', True))
+      cuts = kwargs.pop('cuts', None)
+      categories = kwargs.pop('categories', None)
+      filter_univ = kwargs.pop('filter_univ', False)
+      file_index_offset = kwargs.pop('file_index_offset', 0)
+      fnames = utils._normalize_path_list(fnames, 'filenames')
+      keys = utils._normalize_path_list(keys, 'keys')
+      tasks = []
+      for i, fname in enumerate(fnames):
+        for key in utils._resolve_hdf_keys(fname, keys):
+          tasks.append((fname, key, i + file_index_offset))
+
+      if not tasks:
+        raise ValueError('No keys to load')
+
+      caf_kwargs = dict(kwargs)
+      load_tasks = [
+        (fname, key, fname_idx, reader, cls, caf_kwargs, cuts, categories, filter_univ, verbose)
+        for fname, key, fname_idx in tasks
+      ]
+      chunks = utils.parallel_map_ordered(
+        _caf_load_task, load_tasks, ncpu=ncpu, show_progress=verbose,
+        desc='Loading combined CAF',
+      )
+      return _concat_caf_chunks(chunks, cls, caf_kwargs)
+
+    def load(fname, key, **kwargs):
+      """
+      Load from HDF5 file(s). fname and key may each be a str or list of str.
+      String keys may use shell-style wildcards (*, ?, []), resolved per file.
+
+      ncpu : int, optional
+          Process count for parallel file/key loads (default 1).
+      verbose : bool, optional
+          Print load progress and per-cut row counts (default True).
+      show_progress : bool, optional
+          Deprecated alias for ``verbose``.
+      """
+      thiscaf = CAF._load_combined(
+        fname, key, utils.read_hdf_local, CAF, **kwargs
+      )
+      thiscaf.check_for_duplicates()
+      return thiscaf
     def combine(self,other,duplicate_ok=False,offset=int(1e5)):
       """
       Combine two CAFs
@@ -166,22 +236,13 @@ class CAF:
         livetime = self.livetime
       else:
         livetime = self.livetime + other.livetime
-      #Check if there are any indices in common
       if len(set(self.data.index.values) & set(other.data.index.values)) > 0:
         if not duplicate_ok:
           raise ValueError('Duplicate indices found in combined CAFs')
-        else:
-          # Add big number to the other indices - handle MultiIndex
-          if isinstance(other.data.index, pd.MultiIndex):
-              # For MultiIndex, we need to modify the first level
-              new_levels = list(other.data.index.levels)
-              new_codes = list(other.data.index.codes)
-              # Add offset to the first level
-              new_levels[-1] = new_levels[-1] + offset
-              other.data.index = pd.MultiIndex(levels=new_levels, codes=new_codes, names=other.data.index.names)
-          else:
-              other.data.index = other.data.index + offset
-      self.data = pd.concat([self.data,other.data],axis=0)
+        other_data = utils.offset_ntuple_index(other.data, offset)
+      else:
+        other_data = other.data
+      self.data = pd.concat([self.data, other_data], axis=0)
       self.pot = pot
       self.livetime = livetime
       return self
@@ -225,7 +286,7 @@ class CAF:
         if key.startswith('fix_'):
           print(key)
     #-------------------- cutters --------------------#
-    def apply_cut(self, cut_name, condition=None, cut=True):
+    def apply_cut(self, cut_name, condition=None, cut=True, verbose=True):
       """
       Apply a cut based on a specified condition.
 
@@ -237,6 +298,8 @@ class CAF:
           Boolean array where True indicates the row passes the cut.
       cut : bool, optional
           Whether to actually apply the cut to the data. Default is True.
+      verbose : bool, optional
+          Print row-count summary when filtering (default True).
       """
       if 'cut.' not in cut_name: #Allow us to be lazy
           cut_name = 'cut.'+cut_name
@@ -245,7 +308,8 @@ class CAF:
           cut_col = self.get_key(cut_name)
           self.data = self.data[self.data[cut_col].values]
           new_size = len(self.data)
-          print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
+          if verbose:
+              print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
           return
       elif condition is None:
           raise Exception(f'Attempting to cut on key not in data: {cut_name}')
@@ -259,8 +323,62 @@ class CAF:
           orig_size = len(self.data)
           self.data = self.data[self.data[col]]
           new_size = len(self.data)
-          print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
+          if verbose:
+              print(f'Applied cut on key: {cut_name} ({orig_size:,} --> {new_size:,})')
           return
+
+    def apply_cut_chain(self, cuts, *, verbose=True):
+      """
+      Apply a sequence of cuts using existing ``cut.*`` columns.
+
+      Parameters
+      ----------
+      cuts : str or sequence
+          Cut names (``'fv'`` or ``'cut.fv'``). ``'precut'`` entries are skipped.
+      verbose : bool, optional
+          Passed to :meth:`apply_cut` (default True).
+
+      Returns
+      -------
+      self
+      """
+      if cuts is None:
+          return self
+      if isinstance(cuts, str):
+          cuts = [cuts]
+      for cut in cuts:
+          if cut == 'precut':
+              continue
+          self.apply_cut(cut, verbose=verbose)
+      return self
+
+    def apply_categories(self, categories, *, verbose=True):
+      """
+      Keep rows whose ``truth.event_type`` is in ``categories``.
+
+      Parameters
+      ----------
+      categories : int or sequence of int, optional
+          Truth event type codes to keep (e.g. ``0`` contained numu CC,
+          ``[0, 1]`` contained + uncontained). ``None`` is a no-op.
+      verbose : bool, optional
+          Print row counts before and after (default True).
+
+      Returns
+      -------
+      self
+      """
+      if categories is None:
+          return self
+      if isinstance(categories, (int, np.integer)):
+          categories = [int(categories)]
+      condition = self.data.truth.event_type.isin(categories)
+      orig_size = len(self.data)
+      self.data = self.data[condition]
+      new_size = len(self.data)
+      if verbose:
+          print(f'Applied category filter {list(categories)} ({orig_size:,} --> {new_size:,})')
+      return self
     #-------------------- setters --------------------#
     def add_universe_weights(self, fname, keys, duplicate_ok=False, keep_patterns=None):
         """
@@ -388,17 +506,33 @@ class CAF:
       """
       self.costheta_binning = costheta_bins
     #-------------------- adders --------------------#
-    def add_key(self,keys,fill=np.nan):
+    def add_key(self,keys,fill=np.nan,overwrite=False):
       """
       Add key to dataframe
       """
-      updated_df = pandas_helpers.multicol_addkey(self.data, keys,fill=fill,inplace=False)
-      # Update the current df with the new DataFrame
-      new_cols = updated_df.columns.difference(self.data.columns)
-      cols_to_add = {col: updated_df[col] for col in new_cols}
-      #print(cols_to_add.values())
-      self.data = pd.concat([self.data, pd.DataFrame(cols_to_add)], axis=1)
-    def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True,verbose=False):
+      if not isinstance(keys, list):
+        keys = [keys]
+
+      cols = pandas_helpers.getcolumns(keys, depth=self.key_length())
+      existing_cols = [col for col in cols if col in self.data.columns]
+      missing_cols = [col for col in cols if col not in self.data.columns]
+
+      fill_arr = np.asarray(fill)
+      if fill_arr.ndim == 0:
+        fill_1d = np.full(len(self.data), fill_arr.item())
+      else:
+        fill_1d = np.ravel(fill_arr)
+        if fill_1d.shape[0] != len(self.data):
+          raise ValueError(f'fill has length {fill_1d.shape[0]}, expected {len(self.data)}')
+
+      if overwrite and len(existing_cols) > 0:
+        for col in existing_cols:
+          self.data.loc[:, col] = fill_1d
+
+      if len(missing_cols) > 0:
+        cols_to_add = {col: fill_1d.copy() for col in missing_cols}
+        self.data = pd.concat([self.data, pd.DataFrame(cols_to_add, index=self.data.index)], axis=1)
+    def add_cols(self,keys,values,conditions=None,fill=np.nan,pad_cols=True,verbose=False,overwrite=False):
       """
       Generalized method to add a column based on conditions and corresponding values.
 
@@ -454,7 +588,8 @@ class CAF:
       if len(np.shape(conditions)) == 1:
         conditions = [conditions] #Make sure it's a list of lists
       #Convert
-      self.add_key(keys, fill=fill)
+      self.add_key(keys, fill=fill, overwrite=overwrite)
+
       cols = pandas_helpers.getcolumns(keys, depth=self.key_length())
       #Pad cols
       if len(cols) == 1 and len(cols) < len(values):
@@ -493,52 +628,57 @@ class CAF:
       """
       if df_comp is None: 
         df_comp = self.data
-      
-      if mask is not None: 
-        # Filter df_comp to masked rows only
-        df_comp_masked = df_comp[mask]
-        
-        # Get bins only for the masked subset
-        data_masked = self.data[mask].copy()
-        result_masked = object_calc.get_df_from_bins(data_masked,df_comp_masked,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
-        
-        # Get the converted column name (get_df_from_bins converts assign_key internally)
-        assign_key_col = self.get_key(assign_key)[0] if assign_key is not None else 'binning'
-        
-        # Convert categorical to int values for HDF5 compatibility
-        bin_values = result_masked[assign_key_col]
-        if pd.api.types.is_categorical_dtype(bin_values):
-          bin_values = bin_values.cat.codes.astype(int)
-          # Replace -1 codes (which represent NaN) with replace_nan
-          bin_values = bin_values.replace(-1, replace_nan)
-        
-        # Only assign to the masked rows, preserving existing values for other rows
-        self.data.loc[mask, assign_key_col] = bin_values.values
+
+      if not object_calc.check_reference(self.data, df_comp):
+        return
+
+      # Resolve key/assign_key the same way object_calc.get_df_from_bins does
+      comp_key = pandas_helpers.getcolumns([key], depth=len(df_comp.keys()[0]))[0]
+      if assign_key is None:
+        assign_key = "binning"
+      assign_key_col = pandas_helpers.getcolumns([assign_key], depth=len(self.data.keys()[0]))[0]
+
+      if not low_to_high:
+        bins = sorted(bins)
+
+      # Ensure destination column exists once (fill value matches previous behavior)
+      if assign_key_col not in self.data.columns:
+        self.add_key([assign_key], fill=replace_nan)
+
+      # Build source series and optional mask without making dataframe copies
+      source = df_comp.loc[:, comp_key]
+      if mask is not None:
+        mask_arr = np.asarray(mask, dtype=bool)
       else:
-        # No mask - assign to entire dataframe
-        self.data = object_calc.get_df_from_bins(self.data,df_comp,bins,key,assign_key=assign_key,low_to_high=low_to_high,replace_nan=replace_nan)
-        
-        # Convert categorical to int values for HDF5 compatibility
-        assign_key_col = self.get_key(assign_key)[0] if assign_key is not None else 'binning'
-        if assign_key_col in self.data.columns:
-          bin_values = self.data[assign_key_col]
-          if pd.api.types.is_categorical_dtype(bin_values):
-            bin_values = bin_values.cat.codes.astype(int)
-            # Replace -1 codes (which represent NaN) with replace_nan
-            bin_values = bin_values.replace(-1, replace_nan)
-            self.data[assign_key_col] = bin_values
+        mask_arr = np.ones(len(source), dtype=bool)
+
+      if not np.any(mask_arr):
+        return
+
+      source_masked = source.loc[mask_arr]
+      binned = pd.cut(source_masked, bins, labels=range(len(bins)-1), right=False)
+      binned = binned.cat.add_categories([replace_nan]).fillna(replace_nan)
+      codes = binned.cat.codes.astype(int)
+      if replace_nan in binned.cat.categories:
+        replace_nan_code = binned.cat.categories.get_loc(replace_nan)
+        codes = codes.replace(replace_nan_code, replace_nan)
+      codes = codes.replace(-1, replace_nan)
+
+      # In place assignment to masked rows only
+      self.data.loc[mask_arr, assign_key_col] = codes.values
     def postprocess(self):
       """
       Run all post processing
       """
       pass
-    def scale_to_pot(self,nom_pot,sample_pot=None,overwrite=False):
+    def scale_to_pot(self,nom_pot,sample_pot=None,overwrite=False,verbose=True):
       """
       Scale to nominal protons on target (POT). Need sample POT as input
       """
       #if sample_pot is None: sample_pot = self.pot
       assert sample_pot is not None, 'sample POT is None'
-      if sample_pot == nom_pot: print('WARNING: sample POT is equal to nominal POT')
+      if sample_pot == nom_pot and verbose:
+          print('WARNING: sample POT is equal to nominal POT')
       if not self.check_key('genweight'): #key not in dataframe
         keys = ['genweight']
         self.add_key(keys)
@@ -549,15 +689,17 @@ class CAF:
           self.data.genweight = np.ones(len(self.data))
         else:
           raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
-      print(f'--scaling to POT ({nom_pot/sample_pot:.2e}): {sample_pot:.2e} -> {nom_pot:.2e}')
+      if verbose:
+          print(f'--scaling to POT ({nom_pot/sample_pot:.2e}): {sample_pot:.2e} -> {nom_pot:.2e}')
       self.data.genweight = self.data.genweight*nom_pot/sample_pot
-    def scale_to_livetime(self,nom_livetime,sample_livetime=None,overwrite=False,f=0.):
+    def scale_to_livetime(self,nom_livetime,sample_livetime=None,overwrite=False,f=0.,verbose=True):
       """
       Scale to nominal livetime. Need sample livetime as input
       f is the neutrino gate fraction in the intime cosmics sample. Only use for data.
       """
       assert sample_livetime is not None, 'sample livetime is None'
-      if sample_livetime == nom_livetime: print('WARNING: sample livetime is equal to nominal livetime')
+      if sample_livetime == nom_livetime and verbose:
+          print('WARNING: sample livetime is equal to nominal livetime')
       if not self.check_key('genweight'): #key not in dataframe
         keys = ['genweight']
         self.add_key(keys)
@@ -567,10 +709,11 @@ class CAF:
         if not np.all(self.data.genweight == 1.):
           raise ValueError('genweight is set, but overwrite is False and genweight is not equal to 1')
       scale_factor = nom_livetime*(1.-f)/sample_livetime
-      print(f'--scaling to livetime ({scale_factor:.2e}): {sample_livetime:.2e} --> {nom_livetime:.2e}')
-      if f > 0:
-        print(f'---scale factor without f: {nom_livetime/sample_livetime:.4e}')
-        print(f'--- f: {f:.4f}')
+      if verbose:
+          print(f'--scaling to livetime ({scale_factor:.2e}): {sample_livetime:.2e} --> {nom_livetime:.2e}')
+          if f > 0:
+              print(f'---scale factor without f: {nom_livetime/sample_livetime:.4e}')
+              print(f'--- f: {f:.4f}')
       self.data.genweight = self.data.genweight*scale_factor
     def scale_to_prism_coeff(self,prism_coeff):
       """

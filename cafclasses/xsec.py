@@ -11,7 +11,7 @@ from sbnd.general import plotters
 from sbnd.plotlibrary import makeplot
 from scipy.stats import norm
 
-RETAINED_VARIANCE_TOL=0.9999
+RETAINED_VARIANCE_TOL=0.999
 PINV_RCOND=1e-4
 
 class XSec:
@@ -469,7 +469,7 @@ class XSec:
             c='k',fmt='o',capsize=3,markersize=3)
         # Data - norm unc
         ax.stairs(self.unfold_results[names[0]]['sig_unfold']*self.yscale*self.unfold_results[names[0]]['fracunc_unfold_norm'],
-            self.bins, label='Norm. Syst. Unc.', fill=True, color='gray',
+            self.bins, label='Norm. Syst. Unc.', fill=True, color='black',
             alpha=0.5
         )
         ax.legend(fontsize=legend_fontsize)
@@ -477,8 +477,8 @@ class XSec:
         ax.set_ylabel(self.xsec_label)
         title_fontsize = 18 if len(title) > 40 else 24
         ax.set_title(title,fontsize=title_fontsize)
-        plotters.add_label(ax,label,where='topleftoutside',color='gray')
-        plotters.add_label(ax,pot_label,where='toprightoutside',color='gray')
+        plotters.add_label(ax,label,where='topleftoutside',color='black')
+        plotters.add_label(ax,pot_label,where='toprightoutside',color='black')
         return fig,ax
 
     def plot_unfold_2d(self, names, model_labels, binning2D, title='', label='', pot_label='', data_label='Data', verbose=False, **kwargs):
@@ -506,15 +506,15 @@ class XSec:
             color='k',capsize=3,markersize=3)
         # Data - norm unc
         fig,axs = binning2D.plot_differential_stairs_binned(self.unfold_results[names[0]]['sig_unfold']*self.yscale*self.unfold_results[names[0]]['fracunc_unfold_norm'],
-            label='Norm. Syst. Unc.',fill=True,color='gray',alpha=0.5,
+            label='Norm. Syst. Unc.',fill=True,color='black',alpha=0.5,
             fig=fig,axs=axs,add_labels=True,legend=True,xlabel=r'Regularized $p_\mu$ [GeV]',
         ylabel=self.xsec_label)
 
         title_fontsize = 18 if len(title) > 50 else 24
         axs[0,1].set_title(title,fontsize=title_fontsize)
 
-        plotters.add_label(axs[0,2],pot_label,where='toprightoutsidepad',color='gray')
-        plotters.add_label(axs[0,0],label,where='topleftoutsidepad',color='gray')
+        plotters.add_label(axs[0,2],pot_label,where='toprightoutsidepad',color='black')
+        plotters.add_label(axs[0,0],label,where='topleftoutsidepad',color='black')
         for ax in axs.flatten():
             ax.set_ylim(0,None)
         return fig,axs
@@ -577,8 +577,8 @@ class XSec:
         )
         title_fontsize = 18 if len(title) > 50 else 24
         axs[0,1].set_title(title, fontsize=title_fontsize)
-        plotters.add_label(axs[0,2], pot_label, where='toprightoutsidepad', color='gray')
-        plotters.add_label(axs[0,0], label, where='topleftoutsidepad', color='gray')
+        plotters.add_label(axs[0,2], pot_label, where='toprightoutsidepad', color='black')
+        plotters.add_label(axs[0,0], label, where='topleftoutsidepad', color='black')
         return fig, axs
 
     def plot_smear(self, name, title='', label='', pot_label='', 
@@ -595,8 +595,8 @@ class XSec:
         title_fontsize = 16 if len(title) > 40 else 24
         ax.set_title(title,fontsize=title_fontsize)
         fig.colorbar(im,ax=ax)
-        plotters.add_label(ax,label,where='topleftoutside',color='gray')
-        plotters.add_label(ax,pot_label,where='toprightoutside',color='gray')
+        plotters.add_label(ax,label,where='topleftoutside',color='black')
+        plotters.add_label(ax,pot_label,where='toprightoutside',color='black')
         return fig,ax
     
     def plot_residuals(self, names, model_labels, title='', label='', pot_label='',
@@ -636,8 +636,8 @@ class XSec:
         title_fontsize = 18 if len(title) > 40 else 24
         ax.set_title(title, fontsize=title_fontsize)
         ax.legend(fontsize=legend_fontsize)
-        plotters.add_label(ax, label, where='topleftoutside', color='gray')
-        plotters.add_label(ax, pot_label, where='toprightoutside', color='gray')
+        plotters.add_label(ax, label, where='topleftoutside', color='black')
+        plotters.add_label(ax, pot_label, where='toprightoutside', color='black')
         return fig, ax
 
     def plot_response(self, name, title='', label='', pot_label='', vmin=None, vmax=None, cmap='RdPu', **kwargs):
@@ -653,8 +653,8 @@ class XSec:
         title_fontsize = 16 if len(title) > 40 else 24
         ax.set_title(title,fontsize=title_fontsize)
         fig.colorbar(im,ax=ax)
-        plotters.add_label(ax,label,where='topleftoutside',color='gray')
-        plotters.add_label(ax,pot_label,where='toprightoutside',color='gray')
+        plotters.add_label(ax,label,where='topleftoutside',color='black')
+        plotters.add_label(ax,pot_label,where='toprightoutside',color='black')
         return fig,ax
 
     def save(self, save_dir, metadata_dir='metadata_xsec'):

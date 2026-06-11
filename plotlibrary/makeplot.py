@@ -139,7 +139,7 @@ def create_hist(series,labels,dens=False,yerr=None,frac_yerr=True,yerr_label='St
             chi2_str = utils.get_chi2_dof_pval_str(chi2,dof,pval)
             data_events_label += f'\n({chi2_str})'
         else:
-          data_events_label = None
+          data_events_label = 'Data'
         ax.errorbar(bin_centers,data_counts,yerr=data_stds,fmt='o',color='black',label=data_events_label)
     if not stackfrac:
         plot_hist_with_uncertainty(bins=bins,n_perbin=n_perbin,yerr_arr=yerr_arr,yerr_label=yerr_label,ax=ax)

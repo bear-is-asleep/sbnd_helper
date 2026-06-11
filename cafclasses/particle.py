@@ -27,12 +27,15 @@ class Particle(CAF):
                     ,momentum_bins=self.momentum_binning
                     ,costheta_bins=self.costheta_binning
                     ,pot=self.pot)
-    def load(fname,key,**kwargs):
+    def load(fname, key, **kwargs):
         """
-        Load data from hdf5 file
+        Load data from HDF5 file(s). fname and key may each be a str or list of str.
+        String keys may use shell-style wildcards (*, ?, []).
         """
-        df = pd.read_hdf(fname,key=key,**kwargs)
-        return Particle(df,**kwargs)
+        from sbnd.general.utils import read_hdf_local
+        return CAF._load_combined(
+            fname, key, read_hdf_local, Particle, **kwargs
+        )
     #-------------------- setters --------------------#
     def set_nu_inrange(self,nu):
         """

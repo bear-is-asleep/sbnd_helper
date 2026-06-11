@@ -2,7 +2,15 @@ from .particlegroup import ParticleGroup
 import pandas as pd
 from sbnd.detector.volume import *
 from pyanalib import pandas_helpers
-from .parent import filter_univ_columns
+from .parent import CAF, filter_univ_columns
+
+
+def _interaction_hdf_reader(fname, key, filter_univ=True, **kwargs):
+    df = pd.read_hdf(fname, key=key, **kwargs)
+    if filter_univ:
+        df = filter_univ_columns(df)
+    return df
+
 
 class CAFInteraction(ParticleGroup):
     """
@@ -16,11 +24,12 @@ class CAFInteraction(ParticleGroup):
         return CAFInteraction(data)
     def copy(self,deep=True):
         return CAFInteraction(self.data.copy(deep))
-    def load(fname,key='evt_0',filter_univ=True,**kwargs):
-        df = pd.read_hdf(fname,key=key,**kwargs)
-        if filter_univ:
-            df = filter_univ_columns(df)
-        return CAFInteraction(df,**kwargs)
+    def load(fname, key='evt_0', filter_univ=True, **kwargs):
+        from functools import partial
+        return CAF._load_combined(
+            fname, key, partial(_interaction_hdf_reader, filter_univ=filter_univ),
+            CAFInteraction, **kwargs,
+        )
     #-------------------- setters --------------------#
     def set_mcnu_containment(self,mcnu):
         """

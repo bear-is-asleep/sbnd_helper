@@ -4,8 +4,24 @@ from .particlegroup import ParticleGroup
 from sbnd.detector.volume import *
 from sbnd.detector.definitions import *
 from sbnd.constants import *
-from sbnd.general.utils import read_hdf_xrootd
 import numpy as np
+
+
+PREPROCESSORS = {
+    "det": lambda slc: slc.cut_is_cont(cut=False),
+    "flux": lambda slc: slc.merge_flux_universes(),
+}
+
+
+def run_preprocess(slc, stages=("det",)):
+    """Run registered preprocessors (column definition, no row filtering).
+
+    Registered stages: ``det`` (containment columns), ``flux`` (merge flux universes).
+    """
+    for stage in stages:
+        if stage not in PREPROCESSORS:
+            raise KeyError(f"unknown preprocess stage: {stage}")
+        PREPROCESSORS[stage](slc)
 
 
 class CAFSlice(ParticleGroup):
@@ -24,26 +40,106 @@ class CAFSlice(ParticleGroup):
                       ,prism_bins=self.prism_binning
                       ,pot=self.pot
                       ,filter_univ=self.filter_univ)
-    def copy(self,deep=True):
-      return CAFSlice(self.data.copy(deep),pot=self.pot,prism_bins=self.prism_binning)
-    def load(fname,key='slice',filter_univ=False,**kwargs):
-      if isinstance(key,list):
-        if len(key) == 0:
-          raise ValueError(f'No keys provided for {fname}')
-        for i,k in enumerate(key):
-          if i == 0:
-            thisslc = CAFSlice(read_hdf_xrootd(fname,key=k),**kwargs)
-          else:
-            thisslc.combine(CAFSlice(read_hdf_xrootd(fname,key=k),**kwargs))
-      elif isinstance(key,str):
-        thisslc = CAFSlice(read_hdf_xrootd(fname,key=key),**kwargs)
-      else:
-        raise ValueError(f'Invalid key: {key}')
-      if filter_univ:
-        from .parent import filter_univ_columns
-        df = filter_univ_columns(thisslc.data)
-        thisslc = CAFSlice(df,**kwargs)
-      return thisslc
+    def copy(self, deep=True, duplicate_ok=False):
+      return CAFSlice(
+          self.data.copy(deep),
+          pot=self.pot,
+          prism_bins=self.prism_binning,
+          duplicate_ok=duplicate_ok,
+      )
+    def load(fname, key='slice', filter_univ=False, cuts=None, categories=None, preprocess=False, **kwargs):
+      """
+      Load slice CAF from HDF5 file(s).
+
+      Parameters
+      ----------
+      fname : str or list
+          Path(s) to HDF5 file(s).
+      key : str or list, optional
+          HDF5 key(s) to read (default ``'slice'``).
+      filter_univ : bool, optional
+          Drop universe-weight columns after load (default False).
+      cuts : str or sequence, optional
+          Cut names applied per input file before concatenation (default
+          None). Names may be short (``'fv'``) or full (``'cut.fv'``); each
+          must exist as a boolean ``cut.*`` column. Use e.g. ``PAND_CUTS``
+          from ``naming``. Entries named ``'precut'`` are skipped.
+      categories : int or sequence of int, optional
+          Truth ``event_type`` codes to keep after cuts (default None, load
+          all). E.g. ``0`` for contained numu CC, ``[0, 1]`` for contained
+          and uncontained signal.
+      file_index_offset : int, optional
+          Added to per-file ``__ntuple`` index offsets when loading multiple
+          chunks sequentially (default 0).
+      verbose : bool, optional
+          Print load progress and per-cut row counts (default True).
+      preprocess : bool, str, or sequence of str, optional
+          If truthy, run :func:`run_preprocess` after load. Pass ``True`` for
+          default stages ``("det",)``, a stage name (e.g. ``"flux"``) for one
+          stage, or e.g. ``("det", "flux")`` to also merge flux universe
+          weights into ``Flux_combine`` columns. Note: ``("flux")`` without a
+          trailing comma is a ``str``, not a tuple; use ``("flux",)`` or
+          ``"flux"``.
+      **kwargs
+          Passed to ``CAF._load_combined`` / ``CAFSlice`` (e.g. ``ncpu``).
+      """
+      from .parent import CAF
+      from sbnd.general.utils import read_hdf_local
+      thiscaf = CAF._load_combined(
+        fname, key, read_hdf_local, CAFSlice,
+        filter_univ=filter_univ, cuts=cuts, categories=categories, **kwargs
+      )
+      if preprocess:
+        if isinstance(preprocess, str):
+          stages = (preprocess,)
+        elif isinstance(preprocess, (list, tuple)):
+          stages = tuple(preprocess)
+        else:
+          stages = ("det",)
+        run_preprocess(thiscaf, stages=stages)
+      return thiscaf
+    def merge_flux_universes(self):
+      """
+      Combine per-component truth ``*_Flux`` universe weights into ``Flux_combine``.
+
+      For each universe index 0..99, multiplies clipped component weights per
+      event, drops the source ``*_Flux`` columns, and adds ``Flux_combine`` cols.
+      No-op if ``Flux_combine`` already present or no ``*_Flux`` columns exist.
+      """
+      if not hasattr(self.data.columns, "levels"):
+        return self
+      if any(col[1] == "Flux_combine" for col in self.data.columns):
+        return self
+
+      flux_keys = [col for col in self.data.columns if "_Flux" in col[1]]
+      if not flux_keys:
+        return self
+
+      nuniv = 100
+      n_events = len(self.data)
+      flux_weights = np.ones((nuniv, n_events))
+
+      for i in range(nuniv):
+        use_cols = [k for k in flux_keys if f"univ_{i}" == k[2]]
+        if not use_cols:
+          continue
+        with np.errstate(invalid="ignore"):
+          product = np.clip(self.data.loc[:, use_cols].values, 0, 10).prod(axis=1)
+        flux_weights[i] = np.clip(product, 0, 10)
+
+      new_keys = []
+      for col in flux_keys[:nuniv]:
+        lst = list(col)
+        lst[1] = "Flux_combine"
+        new_keys.append(utils.col_tuple_to_key(lst))
+
+      flux_src_cols = [
+        col for col in self.data.columns
+        if "_Flux" in col[1] and col[1] != "Flux_combine"
+      ]
+      self.data = self.data.drop(columns=flux_src_cols)
+      self.add_cols(new_keys, list(flux_weights))
+      return self
     #-------------------- setters --------------------#
     def set_mcnu_containment(self,mcnu,suffix=""):
       """
@@ -51,58 +147,96 @@ class CAFSlice(ParticleGroup):
       """
       return super().set_mcnu_containment(mcnu,'pandora',suffix=suffix)
     #-------------------- cutters --------------------#
-    def cut_is_cont(self,cut=True,suffix=""):
+    def cut_is_cont(self,cut=False):
       """
-      Cut to only contained
+      Cut to only contained muons.
+
+      Always stores both reco and truth columns:
+      cut.cont / cut.truth.cont: per-TPC (cont_tpc0 | cont_tpc1)
+      cut.cont_full / cut.truth.cont_full: detector-wide is_contained
       """
-      col = self.get_key(f'mu{suffix}.pfp.trk.is_contained')[0]
-      condition = self.data.loc[:,col] == True
-      self.apply_cut('cut.cont', condition, cut=cut)
-      self.apply_cut('cut.truth.cont', self.data.slc.truth.mu.is_contained == True, cut=False) # Never cut on truth
-    def cut_has_nuscore(self,cut=True):
+      col_tpc0 = self.get_key(f'mu.pfp.trk.cont_tpc0')[0]
+      col_tpc1 = self.get_key(f'mu.pfp.trk.cont_tpc1')[0]
+      true_col_tpc0 = self.get_key(f'truth.mu.cont_tpc0')[0]
+      true_col_tpc1 = self.get_key(f'truth.mu.cont_tpc1')[0]
+      condition_tpc = (self.data.loc[:,col_tpc0] == True) | (self.data.loc[:,col_tpc1] == True)
+      true_condition_tpc = (self.data.loc[:,true_col_tpc0] == True) | (self.data.loc[:,true_col_tpc1] == True)
+
+      col = self.get_key(f'mu.pfp.trk.is_contained')[0]
+      true_col = self.get_key(f'truth.mu.is_contained')[0]
+      condition_full = self.data.loc[:,col] == True
+      true_condition_full = self.data.loc[:,true_col] == True
+
+      self.apply_cut('cut.cont', condition_tpc, cut=cut)
+      self.apply_cut('cut.truth.cont', true_condition_tpc, cut=False) # Never cut on truth
+      self.apply_cut('cut.cont_full', condition_full, cut=False) # Never cut on full containment
+      self.apply_cut('cut.truth.cont_full', true_condition_full, cut=False) # Never cut on truth
+
+    def cut_all_cont(self, cut=False):
       """
-      Cut those that don't have a nu score. They didn't get any reco
+      Require all score-cut PFP tracks in the slice to be TPC-contained (slc.all_pfps_cont).
       """
-      condition = self.data.nu_score >= 0
-      self.apply_cut('cut.has_nuscore', condition, cut)
-    
-    def cut_cosmic(self,crumbs_score=None,fmatch_score=None,nu_score=None,use_opt0=False,cut=False,use_isclearcosmic=False):
+      condition = self.data.slc.all_pfps_cont == True
+      self.apply_cut('cut.all_cont', condition, cut)
+
+    def cut_cosmic_isclear(self,use_isclearcosmic=False,cut=False):
       """
-      Cut to only cosmic tracks
+      Reject slices marked as clear cosmic
       """
-      #print(f'Number of clear cosmic: {len(self.data[self.data.slc.is_clear_cosmic == 1])}')
       if use_isclearcosmic:
-        #print('Cutting is clear cosmic')
         condition = self.data.slc.is_clear_cosmic != 1
       else:
-        #print('Skipping is clear cosmic cut')
         condition = np.array([True]*len(self.data))
-      if crumbs_score is not None:
-          #print(f'Cutting crumbs score: {crumbs_score}')
-          raise ValueError('Crumbs score not supported for slice yet')
+      self.apply_cut('cut.cosmic_isclear', condition, cut)
+    def cut_cosmic_nuscore(self,nu_score=None,cut=False):
+      """
+      Require a minimum slice nu score
+      """
+      if nu_score is None:
+        condition = np.array([True]*len(self.data))
+      else:
+        condition = self.data.slc.nu_score > nu_score
+      self.apply_cut('cut.cosmic_nuscore', condition, cut)
+    def cut_cosmic_fmatch(self,fmatch_score=None,use_opt0=False,cut=False):
+      """
+      Require a minimum fmatch or opt0-style score
+      """
+      if fmatch_score is None:
+        condition = np.array([True]*len(self.data))
+      elif use_opt0 == True:
+        condition = self.data.slc.opt0.score > fmatch_score
+      elif use_opt0 == 'highlevel':
+        # R - H / R
+        _score = (self.data.opt0.measPE - self.data.opt0.hypoPE)/self.data.opt0.measPE
+        condition = _score > fmatch_score
+      elif use_opt0 == 'barycenterFM':
+        condition = self.data.slc.barycenterFM.score > fmatch_score
+      else:
+        raise ValueError('Fmatch score not supported for slice yet')
+      self.apply_cut('cut.cosmic_fmatch', condition, cut)
+    def cut_cosmic(self,fmatch_score=None,nu_score=None,use_opt0=False,cut=False,use_isclearcosmic=False):
+      """
+      Backward-compatible wrapper for split cosmic cuts
+      """
+      pieces = []
+      if use_isclearcosmic:
+        self.cut_cosmic_isclear(use_isclearcosmic=use_isclearcosmic,cut=False)
+        pieces.append(self.data.cut.cosmic_isclear)
       if fmatch_score is not None:
-          if use_opt0 == True:
-              #print(f'Cutting opt0 score: {fmatch_score}')
-              condition &= self.data.slc.opt0.score > fmatch_score
-          elif use_opt0 == 'highlevel':
-              #print(f'Cutting highlevel opt0 score: {fmatch_score} (R-H/R)')
-              # R - H / R
-              _score = (self.data.opt0.measPE - self.data.opt0.hypoPE)/self.data.opt0.measPE
-              condition &= _score > fmatch_score    
-          elif use_opt0 == 'barycenterFM':
-              #print(f'Cutting barycenterFM score: {fmatch_score}')
-              condition &= self.data.slc.barycenterFM.score > fmatch_score
-          else:
-              #print(f'Cutting fmatch score: {fmatch_score}')
-              raise ValueError('Fmatch score not supported for slice yet')
-              #condition &= self.data.fmatch.score < fmatch_score
+        self.cut_cosmic_fmatch(fmatch_score=fmatch_score,use_opt0=use_opt0,cut=False)
+        pieces.append(self.data.cut.cosmic_fmatch)
       if nu_score is not None:
-          #print(f'Cutting nu score: {nu_score}')
-          condition &= self.data.slc.nu_score > nu_score
-
+        self.cut_cosmic_nuscore(nu_score=nu_score,cut=False)
+        pieces.append(self.data.cut.cosmic_nuscore)
+      if len(pieces) == 0:
+        condition = np.array([True]*len(self.data))
+      else:
+        condition = pieces[0]
+        for cond in pieces[1:]:
+          condition &= cond
       self.apply_cut('cut.cosmic', condition, cut)
       self.apply_cut('cut.truth.cosmic', (self.data.slc.truth.pdg == -1) | (self.data.slc.truth.pdg.isna()), cut=False) # Never cut on truth
-    def cut_flashmatch(self,cut=False,use_isclearcosmic=False,method='barycenterFM'):
+    def cut_flashmatch(self,cut=False,method='barycenterFM'):
       """
       Find each slice in an event and mark the one with the highest score as True
       """
@@ -119,12 +253,10 @@ class CAFSlice(ParticleGroup):
       # Set condition
       condition = pd.Series(False, index=self.data.index)
       condition.loc[inds.values] = True
-      
-      if use_isclearcosmic:
-        condition &= self.data.slc.is_clear_cosmic != 1
+
       self.apply_cut('cut.flashmatch', condition, cut)
       
-    def cut_fv(self,volume=FV,cut=False):
+    def cut_fv(self,cut=False):
       """
       Cut to only in fv
       """
@@ -159,19 +291,19 @@ class CAFSlice(ParticleGroup):
       """
       condition = self.data.slc.barycenterFM.flashPEs.values*prescale > min_flashpe
       self.apply_cut('cut.flashpe', condition, cut)
-    def cut_all(self,cont=False,cut=False,mode='reco'):
+    def cut_all(self,cont=True,cut=False,mode='reco'):
       """
       add a column that is true if all cuts are true
       """
       #print('WARNING: Ensure all cuts in this function are correct')
       if mode == 'reco':
         condition = self.data.cut.fv\
-          & self.data.cut.cosmic\
           & self.data.cut.muon\
           & self.data.cut.flashmatch\
           & self.data.cut.flashpe
         if cont:
           condition &= self.data.cut.cont
+          condition &= self.data.cut.all_cont
         else:
           condition &= self.data.cut.lowz
       elif mode == 'truth':
@@ -190,11 +322,50 @@ class CAFSlice(ParticleGroup):
       """
       pass
       
-    def add_track_flipping(self,suffix="",method='direction'):
+    def add_is_tpc_contained(self,ismc=False):
       """
-      Add track flipping boolean. True if start and end are correctly matched
+      Add is contained boolean. True if the track is contained in the active volume
       """
-      return super().add_track_flipping('pandora',suffix=suffix,method=method)
+      keys = [
+        'mu.pfp.trk.cont_tpc0',
+        'mu.pfp.trk.cont_tpc1',
+        'truth.mu.cont_tpc0',
+        'truth.mu.cont_tpc1',
+        'mu.pfp.trk.truth.p.cont_tpc0',
+        'mu.pfp.trk.truth.p.cont_tpc1',
+      ]
+      cols_start = self.get_key([f'mu.pfp.trk.start.x',f'mu.pfp.trk.start.y',f'mu.pfp.trk.start.z'])
+      cols_end = self.get_key([f'mu.pfp.trk.end.x',f'mu.pfp.trk.end.y',f'mu.pfp.trk.end.z'])
+      start = self.data.loc[:, cols_start]
+      end = self.data.loc[:, cols_end]
+      veto = enters(start, end, NOT_FV_HIGH_Z)
+
+      values = [
+        involume(start, volume=TPC0_BUFFER) & involume(end, volume=TPC0_BUFFER) & ~veto,
+        involume(start, volume=TPC1_BUFFER) & involume(end, volume=TPC1_BUFFER) & ~veto,
+        pd.Series(np.zeros(len(self.data), dtype=bool), index=self.data.index),
+        pd.Series(np.zeros(len(self.data), dtype=bool), index=self.data.index),
+        pd.Series(np.zeros(len(self.data), dtype=bool), index=self.data.index),
+        pd.Series(np.zeros(len(self.data), dtype=bool), index=self.data.index),
+      ]
+      if ismc:
+        cols_truth_start = self.get_key([f'truth.mu.start.x',f'truth.mu.start.y',f'truth.mu.start.z'])
+        cols_truth_end = self.get_key([f'truth.mu.end.x',f'truth.mu.end.y',f'truth.mu.end.z'])
+        cols_truth_match_start = self.get_key([f'mu.pfp.trk.truth.p.start.x',f'mu.pfp.trk.truth.p.start.y',f'mu.pfp.trk.truth.p.start.z'])
+        cols_truth_match_end = self.get_key([f'mu.pfp.trk.truth.p.end.x',f'mu.pfp.trk.truth.p.end.y',f'mu.pfp.trk.truth.p.end.z'])
+        truth_start = self.data.loc[:, cols_truth_start]
+        truth_end = self.data.loc[:, cols_truth_end]
+        match_start = self.data.loc[:, cols_truth_match_start]
+        match_end = self.data.loc[:, cols_truth_match_end]
+        truth_veto = enters(truth_start, truth_end, NOT_FV_HIGH_Z)
+        match_veto = enters(match_start, match_end, NOT_FV_HIGH_Z)
+        values[2:] = [
+          involume(truth_start, volume=TPC0_BUFFER) & involume(truth_end, volume=TPC0_BUFFER) & ~truth_veto,
+          involume(truth_start, volume=TPC1_BUFFER) & involume(truth_end, volume=TPC1_BUFFER) & ~truth_veto,
+          involume(match_start, volume=TPC0_BUFFER) & involume(match_end, volume=TPC0_BUFFER) & ~match_veto,
+          involume(match_start, volume=TPC1_BUFFER) & involume(match_end, volume=TPC1_BUFFER) & ~match_veto,
+        ]
+      self.add_cols(keys,values,fill=False,overwrite=True)
     def add_has_muon(self,suffix=""):
       """
       Check if there is a muon
@@ -206,23 +377,6 @@ class CAFSlice(ParticleGroup):
       #Get slices with muons
       mask = (self.data.loc[:,col] == True).values.flatten()
       self.add_cols(keys,mask,fill=False)
-    def add_tpc_containment(self):
-      """
-      Add tpc containment boolean. True if the track is contained in the TPC
-      """
-      #Set keys, conditions, and values for add_col method
-      keys = [
-        'mu.pfp.trk.cont_tpc0',
-        'mu.pfp.trk.cont_tpc1',
-        # Truth values require g4 information (i don't think we have it in current files)
-      ]
-      conditions = [
-        (involume(self.data.mu.pfp.trk.start,volume=TPC0) & involume(self.data.mu.pfp.trk.end,volume=TPC0)),
-        (involume(self.data.mu.pfp.trk.start,volume=TPC1) & involume(self.data.mu.pfp.trk.end,volume=TPC1)),
-
-      ]
-      values = [True,True]
-      self.add_cols(keys,values,conditions=conditions,fill=False)
     def add_2d_binning(self, costheta_bins=None, momentum_bins=None, momentum_bins_2d=None,
                               include_truth=True, include_reco=True):
       """
@@ -251,6 +405,8 @@ class CAFSlice(ParticleGroup):
       # Truth binning
       if include_truth and self.check_key('truth.mu.dir.z') and self.check_key('truth.mu.totp'):
         self.assign_bins(costheta_bins, 'truth.mu.dir.z', assign_key='true_bin.costheta')
+        # Ensure momentum column exists even when no rows pass a cbin mask.
+        self.add_key(['true_bin.momentum'], fill=-1.0)
         for cbin in range(n_costheta_bins):
           mask = (self.data.true_bin.costheta.values.astype(float) == float(cbin))
           if not np.any(mask):
@@ -273,6 +429,8 @@ class CAFSlice(ParticleGroup):
       # Reco binning
       if include_reco and self.check_key('mu.pfp.trk.costheta') and self.check_key('mu.pfp.trk.P.p_muon'):
         self.assign_bins(costheta_bins, 'mu.pfp.trk.costheta', assign_key='bin.costheta')
+        # Ensure momentum column exists even when no rows pass a cbin mask.
+        self.add_key(['bin.momentum'], fill=-1.0)
         for cbin in range(n_costheta_bins):
           mask = (self.data.bin.costheta.values.astype(float) == float(cbin))
           if not np.any(mask):
@@ -305,6 +463,51 @@ class CAFSlice(ParticleGroup):
         involume(self.data.slc.vertex,volume=AV)
       ]
       self.add_cols(keys,values,fill=False)
+    def add_phi(self,ismc=False):
+      """
+      CORRECT
+      Add phi column
+      Angle of the start direction of the track in the x-y plane
+      """
+      keys = [
+        f'mu.pfp.trk.phi'
+      ]
+      values = [
+        np.arctan2(self.data.mu.pfp.trk.dir.x, self.data.mu.pfp.trk.dir.y)
+      ]
+      if ismc:
+        totp = self.data.truth.mu.totp
+        keys += [
+          'mu.pfp.trk.truth.p.phi',
+          'truth.mu.phi'
+        ]
+        values += [
+          np.arctan2(self.data.mu.pfp.trk.truth.p.genp.x/totp, self.data.mu.pfp.trk.truth.p.genp.y/totp),
+          np.arctan2(self.data.truth.mu.dir.x, self.data.truth.mu.dir.y),
+        ]
+      self.add_cols(keys,values,fill=np.nan)
+
+    def add_theta(self,ismc=False):
+      """
+      Add theta column
+      """
+      keys = [
+        f'mu.pfp.trk.theta',
+      ]
+      values = [
+        np.arccos(self.data.mu.pfp.trk.dir.z)
+      ]
+      if ismc:
+        keys += [
+          'mu.pfp.trk.truth.p.theta',
+          'truth.mu.theta'
+        ]
+        totp = self.data.truth.mu.totp
+        values += [
+          np.arccos(self.data.mu.pfp.trk.truth.p.genp.z/totp),
+          np.arccos(self.data.truth.mu.dir.z)
+        ]
+      self.add_cols(keys,values,fill=np.nan)
     def add_in_fv(self):
       """
       Add containment 1 or 0 for each pfp
@@ -315,12 +518,12 @@ class CAFSlice(ParticleGroup):
         'vertex.fv'
       ]
       values = [
-        involume(self.data.truth.position,volume=FV) & ~involume(self.data.truth.position,volume=NOT_FV_HIGH_Z),
-        involume(self.data.slc.vertex,volume=FV) & ~involume(self.data.slc.vertex,volume=NOT_FV_HIGH_Z)
+        involume_FV(self.data.truth.position),
+        involume_FV(self.data.slc.vertex)
       ]
       self.add_cols(keys,values,fill=False) 
    
-    def add_event_type(self,min_ke=0.1,max_ke=0.8,suffix=""):
+    def add_event_type(self,min_ke=0.1):
       """
       Add event type from genie type map. True event type
 
@@ -328,8 +531,6 @@ class CAFSlice(ParticleGroup):
       ----------
       min_ke : float
         Minimum kinetic energy to be considered a muon [GeV]
-      max_ke : float
-        Maximum kinetic energy to be considered a muon [GeV]
       """
       iscc = self.data.slc.truth.iscc == 1
       isnumu = self.data.slc.truth.pdg == 14
@@ -345,8 +546,15 @@ class CAFSlice(ParticleGroup):
         ismuon = self.data.slc.truth.nmu_27MeV > 0 #KE requirement
       else:
         raise ValueError(f'Invalid min_ke: {min_ke}')
-      cols = self.get_key([f'mu{suffix}.pfp.trk.truth.p.contained'])
-      iscont = (self.data.loc[:,cols[0]] ==1) | (self.data.loc[:,cols[0]] == True) #contained, break down signal and background
+      # Contained in either tpc0 or tpc1
+      cols = self.get_key([
+        'mu.pfp.trk.truth.p.cont_tpc0',
+        'mu.pfp.trk.truth.p.cont_tpc1'
+      ])
+      iscont = (
+        (self.data.loc[:,cols[0]] == 1) | (self.data.loc[:,cols[0]] == True) |
+        (self.data.loc[:,cols[1]] == 1) | (self.data.loc[:,cols[1]] == True)
+      ) # contained in either tpc0 or tpc1, but not both
       
       #aggregate true types
       isnumuccav = iscc & (isnumu | isanumu) & istrueav & ~iscosmic #numu cc av
@@ -389,8 +597,6 @@ class CAFSlice(ParticleGroup):
        
        
         
-      
-      
-      
+
       
   

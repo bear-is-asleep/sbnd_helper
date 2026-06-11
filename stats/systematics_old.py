@@ -12,107 +12,10 @@ from tqdm import tqdm
 import os
 import copy
 import json
-import pickle
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from sbnd.numu.numu_constants import *
 from sbnd.cafclasses.binning import Binning2D
-
-_XSEC_SCALE_VARIABLES = frozenset({"costheta", "momentum", "differential"})
-_SLIM_RW_KEYS = frozenset({"xsec", "flux", "g4"})
-_RW_VARIATIONS = frozenset({"multisigma", "multisim"})
-_RW_TYPES = frozenset({"xsec", "flux", "g4"})
-_FLAT_ANALYZE_KEYS = frozenset({"nt", "stat_flat", "pot"})
-
-
-def xsec_cv_from_event_scale(sel, sel_background, xsec_unit):
-    return (np.asarray(sel, dtype=float) + np.asarray(sel_background, dtype=float)) * xsec_unit
-
-
-def _has_sigma_tilde_universes(sigma_tilde_list):
-    return (
-        sigma_tilde_list is not None
-        and len(sigma_tilde_list) > 0
-        and any(x is not None for x in sigma_tilde_list)
-    )
-
-
-def _is_rw_variation(sys_dict):
-    return (
-        sys_dict.get("variation") in _RW_VARIATIONS
-        or sys_dict.get("type") in _RW_TYPES
-        or sys_dict.get("name") in _SLIM_RW_KEYS
-    )
-
-
-def _is_xsec_scaled_from_events_eligible(key, sys_dict, variable_name):
-    if variable_name not in _XSEC_SCALE_VARIABLES:
-        return False
-    if "cosmic" in key:
-        return False
-    if key in _SLIM_RW_KEYS or key in _FLAT_ANALYZE_KEYS:
-        return False
-    if _is_rw_variation(sys_dict):
-        return False
-    if sys_dict.get("variation") in ("summary", "self"):
-        return False
-    return True
-
-
-def scale_xsec_cov_from_event_fraccov(
-    event_fraccov,
-    event_fraccov_unaltered,
-    event_corr,
-    event_fracunc,
-    event_totalunc,
-    sel,
-    sel_background,
-    xsec_unit,
-):
-    xsec_cv = xsec_cv_from_event_scale(sel, sel_background, xsec_unit)
-    return {
-        "xsec_cov": covariance_from_fraccov(event_fraccov, xsec_cv),
-        "xsec_cov_unaltered": covariance_from_fraccov(event_fraccov_unaltered, xsec_cv),
-        "xsec_fraccov": event_fraccov,
-        "xsec_fraccov_unaltered": event_fraccov_unaltered,
-        "xsec_corr": event_corr,
-        "xsec_fracunc": event_fracunc,
-        "xsec_totalunc": event_totalunc,
-    }
-
-
-def warn_if_event_xsec_fracunc_mismatch(
-    key, variable_name, event_fracunc, xsec_fracunc, tol=1e-4
-):
-    diff = np.abs(np.asarray(event_fracunc, dtype=float) - np.asarray(xsec_fracunc, dtype=float))
-    max_diff = float(np.nanmax(diff)) if diff.size else 0.0
-    if max_diff > tol:
-        warnings.warn(
-            f"event vs xsec fractional uncertainty mismatch for {key} ({variable_name}): "
-            f"max |diff| = {max_diff:g} > {tol:g}",
-            stacklevel=2,
-        )
-    return max_diff
-
-
-def _apply_scaled_xsec_cov_from_events(sys_dict, sel, sel_background, xsec_unit, check=False):
-    scaled = scale_xsec_cov_from_event_fraccov(
-        sys_dict["event_fraccov"],
-        sys_dict["event_fraccov_unaltered"],
-        sys_dict["event_corr"],
-        sys_dict["event_fracunc"],
-        sys_dict["event_totalunc"],
-        sel,
-        sel_background,
-        xsec_unit,
-    )
-    for field, value in scaled.items():
-        sys_dict[field] = value
-    if check:
-        eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(sys_dict["xsec_cov"])
-        sys_dict["xsec_cond"] = cond
-        sys_dict["xsec_eigvals"] = eigvals
-
 
 class Systematics:
     """Class for handling systematic uncertainty processing and computation."""
@@ -325,35 +228,7 @@ class Systematics:
         if self.variable_name == 'differential':
             return r'Reconstructed 2D Bin ID'
         if self.variable_name == 'opt0':
-            return r'$1/Opt0$ Score'
-        if self.variable_name == 'bcfm':
-            return r'BCFM Score'
-        if self.variable_name == 'flashpe':
-            return r'Flash PE'
-        if self.variable_name == 'startx':
-            return r'Muon Start X [cm]'
-        if self.variable_name == 'starty':
-            return r'Muon Start Y [cm]'
-        if self.variable_name == 'startz':
-            return r'Muon Start Z [cm]'
-        if self.variable_name == 'endx':
-            return r'Muon End X [cm]'
-        if self.variable_name == 'endy':
-            return r'Muon End Y [cm]'
-        if self.variable_name == 'endz':
-            return r'Muon End Z [cm]'
-        if self.variable_name == 'phi':
-            return r'$\phi_\mu$ [rad]'
-        if self.variable_name == 'theta':
-            return r'$\theta_\mu$ [rad]'
-        if self.variable_name == 'length':
-            return r'Muon Length [cm]'
-        if self.variable_name == 'vtxx':
-            return r'Interaction Vertex X [cm]'
-        if self.variable_name == 'vtyy':
-            return r'Interaction Vertex Y [cm]'
-        if self.variable_name == 'vtzx':
-            return r'Interaction Vertex Z [cm]'
+            return r'Reconstructed $1/Opt0$ Score'
         return f'{self.variable_name}'
     
     def add_syst(self, key, metadata=None):
@@ -384,7 +259,7 @@ class Systematics:
             if sdict.get('type') not in (None, '')
         })
 
-    def get_sys_keydict(self, keys, pattern=None, stype='RW', ignore_keys=None):
+    def get_sys_keydict(self,keys,pattern=None,stype='RW'):
         """
         We're going to use the fact that the systematic are in the level of truth. '...'
         Return a dictionary with the base key as the dict key and the values are the 
@@ -400,9 +275,6 @@ class Systematics:
             Type of systematic
                 RW : Reweightable (weights in the data frame)
                 Det: Detector systematic (no weights in the data frame)
-        ignore_keys: list, optional
-            List of systematic keys to skip. Matches either the raw key or the
-            key after assign_candidate (e.g. 'stat' or 'stat_rw').
 
         Returns
         -------
@@ -410,9 +282,6 @@ class Systematics:
             Dictionary with the base key as the dict key and the values are the 
             (1) list of tuples of the systematic keys and (2) the names of the systematic
         """
-        if ignore_keys is None:
-            ignore_keys = []
-        ignore_keys = set(ignore_keys)
         def format_name(key):
             #Drop all the plesentaries
             key = key.replace('multisigma_', '')
@@ -491,10 +360,8 @@ class Systematics:
                 passes = True #No pattern
             if not passes:
                 continue
-            raw_candidate = candidate
+                    #print(candidate)
             candidate = assign_candidate(candidate)
-            if raw_candidate in ignore_keys or candidate in ignore_keys:
-                continue
             if candidate not in sys_col_dict:
                 formatted_name = format_name(candidate)
                 sys_col_dict[candidate] = {'cols' : [], 'col_names' : [], 'type' : assign_type(candidate,stype), 'name' : formatted_name, 'label' : formatted_name, 'description' : '', 'variation' : assign_variation(candidate,stype)}
@@ -505,7 +372,7 @@ class Systematics:
         return sys_col_dict
     
     def process_systematics(self, mc_signal_data, mc_sel_signal_data, mc_sel_background_data,
-                           progress_bar=False, sys_names=None, accumulate=False):
+                           progress_bar=False,sys_names=None):
         """
         Process all systematic universes and compute histograms, efficiencies, 
         smearing/response matrices, and sigma_tilde values.
@@ -522,8 +389,6 @@ class Systematics:
             Whether to show progress bar (requires tqdm)
         sys_names : list of str, optional
             Names of the systematics to process. If None, process all systematics
-        accumulate : bool
-            If True, add histograms to existing universe arrays (for chunked builds).
         """
         # Set items to iterate over
         if sys_names is None:
@@ -545,21 +410,13 @@ class Systematics:
             if cols is None:
                 print(f'WARNING: {key} has no cols')
                 continue
-            if not accumulate:
-                sys_dict['sigma_tilde'] = []
-                sys_dict['sel'] = []
-                sys_dict['sel_background'] = []
-                sys_dict['eff_truth'] = []
-                sys_dict['response'] = []
-                sys_dict['cv_response'] = None
-                sys_dict.pop('_universe_index', None)
-            else:
-                sys_dict.setdefault('sigma_tilde', [])
-                sys_dict.setdefault('sel', [])
-                sys_dict.setdefault('sel_background', [])
-                sys_dict.setdefault('eff_truth', [])
-                sys_dict.setdefault('response', [])
-                sys_dict.setdefault('_universe_index', {})
+            # Reset lists for this systematic
+            sys_dict['sigma_tilde'] = []
+            sys_dict['sel'] = []
+            sys_dict['sel_background'] = []
+            sys_dict['eff_truth'] = []
+            sys_dict['response'] = []
+            sys_dict['cv_response'] = None
             is_multisigma = sys_dict['variation'] == 'multisigma'
             has_xsec = (self._true_sig is not None and self._true_sel is not None
                         and self._true_sel_background is not None and self.xsec_unit is not None)
@@ -599,26 +456,10 @@ class Systematics:
                 )
 
                 if is_cv:
-                    if accumulate and sys_dict.get('cv_sel') is not None:
-                        sys_dict['cv_sel'] = sys_dict['cv_sel'] + _sel + _sel_background
-                    else:
-                        sys_dict['cv_sel'] = _sel + _sel_background
+                    sys_dict['cv_sel'] = _sel + _sel_background
                 else:
-                    if accumulate:
-                        idx = sys_dict['_universe_index'].get(col_name)
-                        if idx is None:
-                            idx = len(sys_dict['sel'])
-                            sys_dict['_universe_index'][col_name] = idx
-                            sys_dict['sel'].append(_sel + _sel_background)
-                            sys_dict['sel_background'].append(_sel_background)
-                        else:
-                            sys_dict['sel'][idx] = sys_dict['sel'][idx] + _sel + _sel_background
-                            sys_dict['sel_background'][idx] = (
-                                sys_dict['sel_background'][idx] + _sel_background
-                            )
-                    else:
-                        sys_dict['sel'].append(_sel + _sel_background)
-                        sys_dict['sel_background'].append(_sel_background)
+                    sys_dict['sel'].append(_sel + _sel_background)
+                    sys_dict['sel_background'].append(_sel_background)
 
                 if has_xsec:
                     _sig_truth, _ = np.histogram(
@@ -638,54 +479,26 @@ class Systematics:
                         ref_sig_truth = _sig_truth
                         ref_eff_truth = _eff_truth
                         _response = convert_smearing_to_response(_smearing, _eff_truth)
-                        _cv_sigma = compute_sigma_tilde(
+                        sys_dict['cv_sigma_tilde'] = compute_sigma_tilde(
                             _response, ref_sig_truth, _sel_background, self.xsec_unit)
-                        if accumulate and sys_dict.get('cv_sigma_tilde') is not None:
-                            sys_dict['cv_sigma_tilde'] = sys_dict['cv_sigma_tilde'] + _cv_sigma
-                            sys_dict['cv_response'] = sys_dict['cv_response'] + _response
-                        else:
-                            sys_dict['cv_sigma_tilde'] = _cv_sigma
-                            sys_dict['cv_response'] = _response
-                    elif accumulate:
-                        idx = sys_dict['_universe_index'].get(col_name)
-                        if idx is None:
-                            continue
-                        n_bins = len(self.bins) - 1
-                        sys_dict.setdefault('_smearing_acc', [])
-                        sys_dict.setdefault('_sig_truth_var_acc', [])
-                        sys_dict.setdefault('_sel_truth_var_acc', [])
-                        while len(sys_dict['_smearing_acc']) <= idx:
-                            sys_dict['_smearing_acc'].append(np.zeros((n_bins, n_bins), dtype=float))
-                            sys_dict['_sig_truth_var_acc'].append(np.zeros(n_bins, dtype=float))
-                            sys_dict['_sel_truth_var_acc'].append(np.zeros(n_bins, dtype=float))
-                        sys_dict['_smearing_acc'][idx] += _smearing
-                        sys_dict['_sig_truth_var_acc'][idx] += _sig_truth
-                        sys_dict['_sel_truth_var_acc'][idx] += _sel_truth
+                        sys_dict['cv_response'] = _response
                     else:
                         if sys_dict['type'] == 'xsec':
                             _response = convert_smearing_to_response(_smearing, _eff_truth)
-                            _eff_out = _eff_truth
+                            sys_dict['eff_truth'].append(_eff_truth)
                         else:
                             ref_eff_truth = compute_efficiency(ref_sig_truth, _sel_truth)
                             _response = convert_smearing_to_response(_smearing, ref_eff_truth)
-                            _eff_out = ref_eff_truth
+                            sys_dict['eff_truth'].append(ref_eff_truth)
                         _sigma_tilde = compute_sigma_tilde(
                             _response, ref_sig_truth, _sel_background, self.xsec_unit
                         )
-                        sys_dict['eff_truth'].append(_eff_out)
-                        sys_dict['response'].append(_response)
                         sys_dict['sigma_tilde'].append(_sigma_tilde)
+                        sys_dict['response'].append(_response)
                 elif not is_cv:
-                    if accumulate:
-                        idx = sys_dict['_universe_index'].get(col_name)
-                        if idx is None or idx >= len(sys_dict['sigma_tilde']):
-                            sys_dict['sigma_tilde'].append(None)
-                            sys_dict['eff_truth'].append(None)
-                            sys_dict['response'].append(None)
-                    else:
-                        sys_dict['sigma_tilde'].append(None)
-                        sys_dict['eff_truth'].append(None)
-                        sys_dict['response'].append(None)
+                    sys_dict['sigma_tilde'].append(None)
+                    sys_dict['eff_truth'].append(None)
+                    sys_dict['response'].append(None)
 
             sys_dict['rank'] = len(sys_dict['sel'])
             if len(sys_dict['sel']) == 0:
@@ -699,8 +512,7 @@ class Systematics:
                                 reco_sel_vars, reco_sel_background_vars,genweights_sel_vars,
                                 genweights_sel_background_vars,
                                 true_sig_vars=None, true_sel_vars=None, true_sel_background_vars=None,
-                                sys_names=None, progress_bar=False, use_cv_background=False,
-                                accumulate=False):
+                                sys_names=None,progress_bar=False, use_cv_background=False):
         """
         Process detector systematic variation (unisim, no weights).
         
@@ -726,8 +538,6 @@ class Systematics:
             Whether to show progress bar (requires tqdm)
         use_cv_background : bool
             Whether to use the CV background for the systematic. If True, the background will be the CV background. If False, the background will be the selected background.
-        accumulate : bool
-            If True, add histograms to existing det universe arrays (for chunked file loads).
         """
         #print(f'len(reco_sel_vars): {len(reco_sel_vars)}')
         #TODO: Handle case where sys_name is not in the systematics dictionary
@@ -757,19 +567,13 @@ class Systematics:
             if provided:
                 sys_dict = self.systematics[sys_name]
             
-            if not accumulate:
-                sys_dict['sigma_tilde'] = []
-                sys_dict['sel'] = []
-                sys_dict['response'] = []
-                sys_dict['cv_response'] = None
-                sys_dict.pop('_smearing_acc', None)
-                sys_dict.pop('_sig_truth_var_acc', None)
-                sys_dict.pop('_sel_truth_var_acc', None)
-            else:
-                sys_dict.setdefault('sigma_tilde', [])
-                sys_dict.setdefault('sel', [])
-                sys_dict.setdefault('response', [])
-            sys_dict['rank'] = 1
+            #Clear the lists for this systematic
+            sys_dict['sigma_tilde'] = []
+            sys_dict['sel'] = []
+            sys_dict['response'] = []
+            sys_dict['cv_response'] = None
+            sys_dict['rank'] = 1 #Only single sigma variation so rank is 1
+            #print(f'i: {i}, sys_name: {sys_name}, len(reco_sel_vars): {len(reco_sel_vars)}')
 
             reco_sel_var = reco_sel_vars[i]
             reco_sel_background_var = reco_sel_background_vars[i]
@@ -794,50 +598,38 @@ class Systematics:
                     weights=genweights_sel_background_var
                 )
 
-            _sel_total = _sel + _sel_background
-            if accumulate and sys_dict['sel']:
-                sys_dict['sel'][0] = sys_dict['sel'][0] + _sel_total
-                if not use_cv_background:
-                    if sys_dict.get('sel_background'):
-                        sys_dict['sel_background'][0] = sys_dict['sel_background'][0] + _sel_background
-                    else:
-                        sys_dict.setdefault('sel_background', []).append(_sel_background.copy())
-            else:
-                sys_dict['sel'].append(_sel_total)
-                if not use_cv_background:
-                    sys_dict.setdefault('sel_background', []).append(_sel_background)
+            # Store sel results
+            sys_dict['sel'].append(_sel + _sel_background)
 
-            has_xsec = (
-                true_sel_var is not None
-                and self.eff_truth is not None
-                and self.sel_truth is not None
-                and self.xsec_unit is not None
-            )
-            if has_xsec:
+            # Compute sigma_tilde only if we have the required attributes and true variables
+            if (true_sel_var is not None and self.eff_truth is not None and 
+                self.sel_truth is not None and self.xsec_unit is not None):
+                # Compute smearing matrix for variation
                 _var_smearing = get_smear_matrix(
                     true_sel_var, reco_sel_var, self.bins, weights=genweights_sel_var
                 )
+
+
                 _sel_truth, _ = np.histogram(
-                    true_sel_var, bins=self.bins, weights=genweights_sel_var
+                    true_sel_var, bins=self.bins,
+                    weights=genweights_sel_var
                 )
-                if accumulate:
-                    n_bins = len(self.bins) - 1
-                    sys_dict.setdefault('_smearing_acc', [])
-                    sys_dict.setdefault('_sel_truth_var_acc', [])
-                    while len(sys_dict['_smearing_acc']) < 1:
-                        sys_dict['_smearing_acc'].append(np.zeros((n_bins, n_bins), dtype=float))
-                        sys_dict['_sel_truth_var_acc'].append(np.zeros(n_bins, dtype=float))
-                    sys_dict['_smearing_acc'][0] += _var_smearing
-                    sys_dict['_sel_truth_var_acc'][0] += _sel_truth
-                else:
-                    _eff_truth = compute_efficiency(self.sig_truth, _sel_truth)
-                    _var_response = convert_smearing_to_response(_var_smearing, _eff_truth)
-                    _var_sigma_tilde = compute_sigma_tilde(
-                        _var_response, self.sig_truth, _sel_background, self.xsec_unit
-                    )
-                    sys_dict['sigma_tilde'].append(_var_sigma_tilde)
-                    sys_dict['response'].append(_var_response)
-            elif not accumulate:
+                # Use CV efficiency (not variation-specific) for response matrix conversion
+                _eff_truth = compute_efficiency(self.sig_truth, _sel_truth)
+                _var_response = convert_smearing_to_response(
+                    _var_smearing, _eff_truth
+                )
+                
+                # Compute sigma_tilde for variation
+                _var_sigma_tilde = compute_sigma_tilde(
+                    _var_response, self.sig_truth, _sel_background, self.xsec_unit
+                )
+                
+                # Store results
+                sys_dict['sigma_tilde'].append(_var_sigma_tilde)
+                sys_dict['response'].append(_var_response)
+            else:
+                # If we don't have the required attributes, append None
                 sys_dict['sigma_tilde'].append(None)
                 sys_dict['response'].append(None)
     
@@ -974,13 +766,7 @@ class Systematics:
             if len(sys_dict['sel']) == 0:
                 raise ValueError(f'No sel events for systematic {key} for {self.variable_name}')
             # First do event covariance
-            cv_from_type = self._get_cv_for_type(sys_dict.get('type'), cv_key='sel', sys_dict=sys_dict)
-            if cv_from_type is not None:
-                event_cv = cv_from_type
-            elif sys_dict.get('cv_sel') is not None:
-                event_cv = sys_dict['cv_sel']
-            else:
-                event_cv = self.sel + self.sel_background
+            event_cv = sys_dict['cv_sel'] if sys_dict.get('cv_sel') is not None else self.sel + self.sel_background
             _cov, _cov_unaltered, _frac, _frac_unaltered, _corr, _fracunc, _event_iters = construct_covariance(
                 event_cv, sys_dict['sel'],
                 rank=sys_dict['rank'],
@@ -1002,67 +788,53 @@ class Systematics:
                 sys_dict['event_cond'] = cond
                 sys_dict['event_eigvals'] = eigvals
 
-            # Xsec covariances
-            sigma_tilde_list = sys_dict.get('sigma_tilde')
-            has_xsec_vars = _has_sigma_tilde_universes(sigma_tilde_list)
-            sys_dict['xsec_cov'] = None
-            sys_dict['xsec_cov_unaltered'] = None
-            sys_dict['xsec_fraccov'] = None
-            sys_dict['xsec_fraccov_unaltered'] = None
-            sys_dict['xsec_corr'] = None
-            sys_dict['xsec_fracunc'] = None
-            sys_dict['xsec_totalunc'] = None
-
-            if compute_xsec_cov and self.sigma_tilde is not None:
-                if has_xsec_vars:
-                    xsec_cv_from_type = self._get_cv_for_type(
-                        sys_dict.get('type'), cv_key='sigma_tilde', sys_dict=sys_dict
-                    )
-                    if xsec_cv_from_type is not None:
-                        xsec_cv = xsec_cv_from_type
-                    elif sys_dict.get('cv_sigma_tilde') is not None:
-                        xsec_cv = sys_dict['cv_sigma_tilde']
-                    else:
-                        xsec_cv = self.sigma_tilde
-                    _xsec_cov, _xsec_cov_unaltered, _xsec_frac, _xsec_frac_unaltered, _xsec_corr, _xsec_fracunc, _xsec_iters = construct_covariance(
-                        xsec_cv, sigma_tilde_list,
-                        rank=sys_dict['rank'],
-                        do_correct_negative_eigenvalues=do_correct_negative_eigenvalues,
-                        assert_cov=False,
-                        **kwargs
-                    )
-                    sys_dict['xsec_cov'] = _xsec_cov
-                    sys_dict['xsec_cov_unaltered'] = _xsec_cov_unaltered
-                    sys_dict['xsec_fraccov'] = _xsec_frac
-                    sys_dict['xsec_fraccov_unaltered'] = _xsec_frac_unaltered
-                    sys_dict['xsec_corr'] = _xsec_corr
-                    sys_dict['xsec_fracunc'] = _xsec_fracunc
-                    if _xsec_iters is not None:
-                        sys_dict['xsec_iters'] = _xsec_iters
-                    sys_dict['xsec_totalunc'] = get_total_unc(xsec_cv, sys_dict['xsec_fracunc'])
-                    if check:
-                        eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(_xsec_cov)
-                        sys_dict['xsec_cond'] = cond
-                        sys_dict['xsec_eigvals'] = eigvals
-                elif _is_rw_variation(sys_dict):
-                    raise ValueError(
-                        f'No sigma_tilde universes for RW systematic {key} for {self.variable_name}; '
-                        f'rebuild with --full-slim'
-                    )
-                elif 'cosmic' in key:
-                    _apply_scaled_xsec_cov_from_events(
-                        sys_dict, self.sel, self.sel_background, self.xsec_unit, check=check
-                    )
-                    warn_if_event_xsec_fracunc_mismatch(
-                        key, self.variable_name, sys_dict['event_fracunc'], sys_dict['xsec_fracunc']
-                    )
-                elif _is_xsec_scaled_from_events_eligible(key, sys_dict, self.variable_name):
-                    _apply_scaled_xsec_cov_from_events(
-                        sys_dict, self.sel, self.sel_background, self.xsec_unit, check=check
-                    )
-                    warn_if_event_xsec_fracunc_mismatch(
-                        key, self.variable_name, sys_dict['event_fracunc'], sys_dict['xsec_fracunc']
-                    )
+            # Xsec (only compute if sigma_tilde exists and compute_xsec_cov; use type-specific CV when available)
+            if compute_xsec_cov and self.sigma_tilde is not None and sys_dict['sigma_tilde'] is not None:
+                if len(sys_dict['sigma_tilde']) == 0:
+                    raise ValueError(f'No sigma_tilde events for systematic {key} for {self.variable_name} (but we expect them)')
+                sigma_tilde_list = sys_dict['sigma_tilde']
+                xsec_cv = sys_dict['cv_sigma_tilde'] if sys_dict.get('cv_sigma_tilde') is not None else self.sigma_tilde
+                _xsec_cov, _xsec_cov_unaltered, _xsec_frac, _xsec_frac_unaltered, _xsec_corr, _xsec_fracunc, _xsec_iters = construct_covariance(
+                    xsec_cv, sigma_tilde_list,
+                    rank=sys_dict['rank'],
+                    do_correct_negative_eigenvalues=do_correct_negative_eigenvalues,
+                    assert_cov=False,
+                    **kwargs
+                )
+                sys_dict['xsec_cov'] = _xsec_cov
+                sys_dict['xsec_cov_unaltered'] = _xsec_cov_unaltered
+                sys_dict['xsec_fraccov'] = _xsec_frac
+                sys_dict['xsec_fraccov_unaltered'] = _xsec_frac_unaltered
+                sys_dict['xsec_corr'] = _xsec_corr
+                sys_dict['xsec_fracunc'] = _xsec_fracunc
+                if _xsec_iters is not None:
+                    sys_dict['xsec_iters'] = _xsec_iters
+                sys_dict['xsec_totalunc'] = get_total_unc(xsec_cv, sys_dict['xsec_fracunc'])
+                if check:
+                    eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(_xsec_cov)
+                    sys_dict['xsec_cond'] = cond
+                    sys_dict['xsec_eigvals'] = eigvals
+            else:
+                sys_dict['xsec_cov'] = None
+                sys_dict['xsec_fraccov'] = None
+                sys_dict['xsec_fraccov_unaltered'] = None
+                sys_dict['xsec_corr'] = None
+                sys_dict['xsec_fracunc'] = None
+                sys_dict['xsec_totalunc'] = None
+            if 'cosmic' in key and compute_xsec_cov:
+                #Special treatment for cosmic uncertainty, just use the event uncertainty, scaled by xsec unit
+                sys_dict['xsec_cov'] = covariance_from_fraccov(
+                    sys_dict['event_fraccov'], (self.sel_background + self.sel) * self.xsec_unit
+                )
+                sys_dict['xsec_fraccov'] = sys_dict['event_fraccov']
+                sys_dict['xsec_fraccov_unaltered'] = sys_dict['event_fraccov_unaltered']
+                sys_dict['xsec_corr'] = sys_dict['event_corr']
+                sys_dict['xsec_fracunc'] = sys_dict['event_fracunc']
+                sys_dict['xsec_totalunc'] = sys_dict['event_totalunc']
+                if check:
+                    eigvals, eigvecs, cond, min_eig, max_eig = _cov_eigenvalue_diagnostics(_xsec_cov)
+                    sys_dict['xsec_cond'] = cond
+                    sys_dict['xsec_eigvals'] = eigvals
             
     def compute_inverse_covariances(self, keys=None, **kwargs):
         """
@@ -1288,7 +1060,7 @@ class Systematics:
         # Detector systematics are typically 'Det' type, while slim are 'RW' type
         if 'geant4_syst' in self.systematics and sys_type in ['xsec', 'flux', 'g4']:
             return self.systematics['geant4_syst']
-        elif 'cosmic_data' in self.systematics and (sys_type == 'cosmic' or sys_name == 'cosmic'):
+        elif 'cosmic_data' in self.systematics and sys_type == 'cosmic':
             return self.systematics['cosmic_data']
         elif 'det_data' in self.systematics and sys_type in ['pds','tpc','sce','calo']:
             return self.systematics['det_data']
@@ -2284,18 +2056,7 @@ class Systematics:
         
         return new_obj
 
-    def save(
-        self,
-        save_dir,
-        save_keys=None,
-        metadata_dir='metadata',
-        save_summaries=False,
-        *,
-        include_sys_keys: list[str] | None = None,
-        exclude_sys_keys: list[str] | None = None,
-        skip_metadata: bool = False,
-        merge_sys_dict: bool = False,
-    ):
+    def save(self, save_dir, save_keys=None, metadata_dir='metadata'):
         """
         Save all the systematics to folders depending on the key.
         The file name depends on covariance, fractional uncertainty, correlation, etc.
@@ -2308,17 +2069,6 @@ class Systematics:
             List of keys to save, if None save all the variable quantities
         metadata_dir : str, optional
             Directory to save the metadata to
-        save_summaries : bool, optional
-            If False (default), skip keys with variation ``summary`` or ``self``.
-            Use True only when you intentionally want combined buckets on disk.
-        include_sys_keys : list, optional
-            If set, only persist these systematic dictionary keys (subfolders).
-        exclude_sys_keys : list, optional
-            Systematic dictionary keys to omit from disk.
-        skip_metadata : bool, optional
-            If True, skip writing metadata CSV files (not sys_dict when merging).
-        merge_sys_dict : bool, optional
-            If True, merge sys_dict entries into an existing sys_dict.json on disk.
         """
         if save_keys is None:
             #Save all the variable quantities by default
@@ -2328,65 +2078,48 @@ class Systematics:
             else:
                 # Use template keys if no systematics yet
                 save_keys = list(Systematics._get_dict_template().keys())
-        def _persist_key(key, sdict):
-            if save_summaries:
-                return True
-            if key == 'cosmic_data':
-                return True
-            return sdict.get('variation') not in {'summary', 'self'}
-
-        persist_keys = {
-            key: sdict for key, sdict in self.systematics.items() if _persist_key(key, sdict)
-        }
-        if include_sys_keys is not None:
-            include_set = set(include_sys_keys)
-            persist_keys = {k: v for k, v in persist_keys.items() if k in include_set}
-        if exclude_sys_keys is not None:
-            exclude_set = set(exclude_sys_keys)
-            persist_keys = {k: v for k, v in persist_keys.items() if k not in exclude_set}
-
-        print(f'Saving {len(save_keys)} array fields for {len(persist_keys)} keys to {save_dir}')
+        print(f'Saving {len(save_keys)} keys to {save_dir}')
         os.makedirs(save_dir, exist_ok=True)
         
-        metadata_path = os.path.join(save_dir, metadata_dir)
-        if not skip_metadata:
-            os.makedirs(metadata_path, exist_ok=True)
-            
-            # Save variable bins
-            np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_bins.csv'), self.bins)
-            
-            # Save CV data (only if not None)
-            np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sel.csv'), self.sel)
-            np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sel_background.csv'), self.sel_background)
-            if self.sel_data is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sel_data.csv'), self.sel_data)
-            
-            if self.sigma_tilde is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sigma_tilde.csv'), self.sigma_tilde)
-            if self.sel_truth is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sel_truth.csv'), self.sel_truth)
-            if self.sel_background_truth is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sel_background_truth.csv'), self.sel_background_truth)
-            if self.sig_truth is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sig_truth.csv'), self.sig_truth)
-            if self.response is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_response.csv'), self.response)
-            if self.smearing is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_smearing.csv'), self.smearing)
-            if self.eff_truth is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_eff_truth.csv'), self.eff_truth)
-            if self.eff_reco is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_eff_reco.csv'), self.eff_reco)
-            if self.sel_data is not None:
-                np.savetxt(os.path.join(metadata_path, f'{self.variable_name}_sel_data.csv'), self.sel_data)
+        # Save metadata needed for reconstruction
+        metadata_dir = os.path.join(save_dir, metadata_dir)
+        os.makedirs(metadata_dir, exist_ok=True)
+        
+        # Save variable bins
+        np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_bins.csv'), self.bins)
+        
+        # Save CV data (only if not None)
+        np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sel.csv'), self.sel)
+        np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sel_background.csv'), self.sel_background)
+        if self.sel_data is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sel_data.csv'), self.sel_data)
+        
+        if self.sigma_tilde is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sigma_tilde.csv'), self.sigma_tilde)
+        if self.sel_truth is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sel_truth.csv'), self.sel_truth)
+        if self.sel_background_truth is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sel_background_truth.csv'), self.sel_background_truth)
+        if self.sig_truth is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sig_truth.csv'), self.sig_truth)
+        if self.response is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_response.csv'), self.response)
+        if self.smearing is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_smearing.csv'), self.smearing)
+        if self.eff_truth is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_eff_truth.csv'), self.eff_truth)
+        if self.eff_reco is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_eff_reco.csv'), self.eff_reco)
+        if self.sel_data is not None:
+            np.savetxt(os.path.join(metadata_dir, f'{self.variable_name}_sel_data.csv'), self.sel_data)
 
-            # Save xsec_unit (only if not None)
-            if self.xsec_unit is not None:
-                np.savetxt(os.path.join(metadata_path, 'xsec_unit.csv'), np.array([self.xsec_unit]))
+        # Save xsec_unit (only if not None)
+        if self.xsec_unit is not None:
+            np.savetxt(os.path.join(metadata_dir, 'xsec_unit.csv'), np.array([self.xsec_unit]))
         
         # Save sys_dict structure (convert tuples to lists for JSON serialization)
         sys_dict_serializable = {}
-        for key, val in persist_keys.items():
+        for key, val in self.systematics.items():
             if val['cols'] is None:
                 cols = None
             else:
@@ -2401,21 +2134,13 @@ class Systematics:
                 'variation': val['variation'],
                 'order': val.get('order', None)
             }
-        if not skip_metadata or merge_sys_dict:
-            sys_dict_path = os.path.join(metadata_path, 'sys_dict.json')
-            if merge_sys_dict and os.path.isfile(sys_dict_path):
-                with open(sys_dict_path, 'r', encoding='utf-8') as f:
-                    existing = json.load(f)
-                existing.update(sys_dict_serializable)
-                sys_dict_serializable = existing
-            os.makedirs(metadata_path, exist_ok=True)
-            with open(sys_dict_path, 'w', encoding='utf-8') as f:
-                json.dump(sys_dict_serializable, f, indent=2)
+        with open(os.path.join(metadata_dir, 'sys_dict.json'), 'w') as f:
+            json.dump(sys_dict_serializable, f, indent=2)
         
         # Save systematics data (folder per dict key, not name)
         metadata_keys = {'name', 'type', 'variation', 'label', 'description',
                          'order', 'cols', 'col_names', 'rank', 'color'}
-        for key, sdict in persist_keys.items():
+        for key, sdict in self.systematics.items():
             subfolder = key
             for k, arr_like in sdict.items():
                 if k in metadata_keys:
@@ -2518,7 +2243,7 @@ class Systematics:
         """
         metadata_dir = os.path.join(load_dir, metadata_dir)
         if not os.path.exists(metadata_dir):
-            raise ValueError(f'Metadata directory not found in {load_dir}. Folders in this directory: {os.listdir(load_dir)}')
+            raise ValueError(f'Metadata directory not found in {load_dir}. This might be an old save format.')
         
         bins = np.loadtxt(os.path.join(metadata_dir, f'{var_name}_bins.csv'))
         
@@ -2789,326 +2514,3 @@ class Systematics:
                     #raise ValueError(f'File {file} has unknown extension, only .csv and .txt are supported')
                     continue
         print(f'Loaded {len(self.systematics)} systematics from {load_dir}')
-
-    @classmethod
-    def for_chunked_build(
-        cls,
-        variable_name,
-        bins,
-        keys,
-        xsec_unit=None,
-        data=None,
-        genweights_data=None,
-        **kwargs,
-    ):
-        """
-        Create a Systematics instance prepared for chunk-wise accumulation.
-        This does not run __init__ and does not compute histograms immediately.
-        """
-        instance = cls.__new__(cls)
-        instance.variable_name = variable_name
-        instance.bins = np.array(bins)
-        instance.xsec_unit = xsec_unit
-        instance.xlabel = instance._get_default_xlabel()
-
-        # Chunk-local placeholders reused by process_systematics_chunk
-        instance._true_sig = None
-        instance._true_sel = None
-        instance._true_sel_background = None
-        instance._reco_sel = None
-        instance._reco_sel_background = None
-        instance._genweights_sig = None
-        instance._genweights_sel = None
-        instance._genweights_sel_background = None
-        instance._genweights_data = np.array(genweights_data) if genweights_data is not None else None
-        instance._data = np.array(data) if data is not None else None
-
-        n_bins = len(instance.bins) - 1
-        instance.sig_truth = None
-        instance.sel_truth = None
-        instance.sel_background_truth = None
-        instance.sel = np.zeros(n_bins, dtype=float)
-        instance.sel_background = np.zeros(n_bins, dtype=float)
-        instance.eff_truth = None
-        instance.eff_reco = None
-        instance.smearing = None
-        instance.response = None
-        instance.sigma_tilde = None
-
-        if instance._data is not None:
-            if instance._genweights_data is None:
-                instance._genweights_data = np.ones(len(instance._data), dtype=float)
-            instance.sel_data, _ = np.histogram(instance._data, bins=instance.bins, weights=instance._genweights_data)
-        else:
-            instance.sel_data = None
-
-        instance.systematics = {}
-        if keys is not None:
-            instance._initialize_from_keys(keys, **kwargs)
-
-        instance._chunk_acc = {
-            "cv": {
-                "sel": np.zeros(n_bins, dtype=float),
-                "sel_background": np.zeros(n_bins, dtype=float),
-                "sig_truth": np.zeros(n_bins, dtype=float),
-                "sel_truth": np.zeros(n_bins, dtype=float),
-                "sel_background_truth": np.zeros(n_bins, dtype=float),
-                "smearing": np.zeros((n_bins, n_bins), dtype=float),
-                "has_truth": False,
-            },
-            "rw": {},
-        }
-        return instance
-
-    @staticmethod
-    def _clip_rw_weights(weights):
-        arr = np.asarray(weights, dtype=float).copy()
-        arr[(np.abs(arr) == np.inf) | np.isnan(arr)] = 1.0
-        return np.clip(arr, 0.0, 10.0)
-
-    def accumulate_cv_chunk(
-        self,
-        reco_sel,
-        reco_sel_background,
-        genweights_sel,
-        genweights_sel_background,
-        true_sig=None,
-        true_sel=None,
-        true_sel_background=None,
-        genweights_sig=None,
-    ):
-        """
-        Accumulate CV histograms for a chunk and set chunk-local arrays for RW processing.
-        """
-        if not hasattr(self, "_chunk_acc"):
-            raise ValueError("Chunk accumulator is not initialized; use for_chunked_build()")
-
-        self._reco_sel = np.asarray(reco_sel)
-        self._reco_sel_background = np.asarray(reco_sel_background)
-        self._genweights_sel = np.asarray(genweights_sel, dtype=float)
-        self._genweights_sel_background = np.asarray(genweights_sel_background, dtype=float)
-        self._true_sig = np.asarray(true_sig) if true_sig is not None else None
-        self._true_sel = np.asarray(true_sel) if true_sel is not None else None
-        self._true_sel_background = np.asarray(true_sel_background) if true_sel_background is not None else None
-        self._genweights_sig = np.asarray(genweights_sig, dtype=float) if genweights_sig is not None else None
-
-        cv = self._chunk_acc["cv"]
-        _sel, _ = np.histogram(self._reco_sel, bins=self.bins, weights=self._genweights_sel)
-        _bg, _ = np.histogram(self._reco_sel_background, bins=self.bins, weights=self._genweights_sel_background)
-        cv["sel"] += _sel
-        cv["sel_background"] += _bg
-
-        has_truth = (
-            self._true_sig is not None
-            and self._true_sel is not None
-            and self._true_sel_background is not None
-            and self._genweights_sig is not None
-            and self.xsec_unit is not None
-        )
-        if has_truth:
-            _sig_truth, _ = np.histogram(self._true_sig, bins=self.bins, weights=self._genweights_sig)
-            _sel_truth, _ = np.histogram(self._true_sel, bins=self.bins, weights=self._genweights_sel)
-            _bg_truth, _ = np.histogram(
-                self._true_sel_background, bins=self.bins, weights=self._genweights_sel_background
-            )
-            _smearing = get_smear_matrix(self._true_sel, self._reco_sel, self.bins, weights=self._genweights_sel)
-            cv["sig_truth"] += _sig_truth
-            cv["sel_truth"] += _sel_truth
-            cv["sel_background_truth"] += _bg_truth
-            cv["smearing"] += _smearing
-            cv["has_truth"] = True
-
-    def process_systematics_chunk(
-        self,
-        mc_signal_data,
-        mc_sel_signal_data,
-        mc_sel_background_data,
-        progress_bar=False,
-        sys_names=None,
-    ):
-        """
-        Chunk wrapper: call process_systematics with accumulate=True after accumulate_cv_chunk.
-        """
-        if not hasattr(self, "_chunk_acc"):
-            raise ValueError("Chunk accumulator is not initialized; use for_chunked_build()")
-        if self._reco_sel is None or self._reco_sel_background is None:
-            raise ValueError(
-                "Set chunk reco arrays before process_systematics_chunk "
-                "(accumulate_cv_chunk or _set_chunk_rw_arrays)"
-            )
-        self.process_systematics(
-            mc_signal_data,
-            mc_sel_signal_data,
-            mc_sel_background_data,
-            progress_bar=progress_bar,
-            sys_names=sys_names,
-            accumulate=True,
-        )
-
-    def add_background_chunk(self, reco_background, genweights_background, true_background=None):
-        """
-        Optional helper to add already-scaled background to CV totals once.
-        """
-        if not hasattr(self, "_chunk_acc"):
-            raise ValueError("Chunk accumulator is not initialized; use for_chunked_build()")
-        reco_background = np.asarray(reco_background)
-        genweights_background = np.asarray(genweights_background, dtype=float)
-        cv = self._chunk_acc["cv"]
-        _bg, _ = np.histogram(reco_background, bins=self.bins, weights=genweights_background)
-        cv["sel_background"] += _bg
-        if true_background is not None and self.xsec_unit is not None:
-            true_background = np.asarray(true_background)
-            _bg_truth, _ = np.histogram(true_background, bins=self.bins, weights=genweights_background)
-            cv["sel_background_truth"] += _bg_truth
-            cv["has_truth"] = True
-
-    def finalize_chunked_build(self):
-        """
-        Finalize accumulated chunk data into the standard Systematics public fields.
-        """
-        if not hasattr(self, "_chunk_acc"):
-            raise ValueError("Chunk accumulator is not initialized; use for_chunked_build()")
-
-        cv = self._chunk_acc["cv"]
-        self.sel = cv["sel"]
-        self.sel_background = cv["sel_background"]
-
-        if cv["has_truth"]:
-            self.sig_truth = cv["sig_truth"]
-            self.sel_truth = cv["sel_truth"]
-            self.sel_background_truth = cv["sel_background_truth"]
-            self.eff_truth = compute_efficiency(self.sig_truth, self.sel_truth)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                self.eff_reco = np.where(self.sig_truth > 0, self.sel / self.sig_truth, 0.0)
-            self.smearing = cv["smearing"]
-            self.response = convert_smearing_to_response(self.smearing, self.eff_truth)
-            self.sigma_tilde = compute_sigma_tilde(self.response, self.sig_truth, self.sel_background, self.xsec_unit)
-        else:
-            self.sig_truth = None
-            self.sel_truth = None
-            self.sel_background_truth = None
-            self.eff_truth = None
-            self.eff_reco = None
-            self.smearing = None
-            self.response = None
-            self.sigma_tilde = None
-
-        keys_to_delete = []
-        for key, sys_dict in self.systematics.items():
-            rw_acc = self._chunk_acc["rw"].get(key)
-            if rw_acc is None:
-                if sys_dict.get("_smearing_acc"):
-                    ref_sig_truth = self.sig_truth
-                    sig_truth_acc = sys_dict.get("_sig_truth_var_acc")
-                    sel_truth_acc = sys_dict.get("_sel_truth_var_acc")
-                    sys_dict["response"] = []
-                    sys_dict["sigma_tilde"] = []
-                    sys_dict["eff_truth"] = []
-                    for i, smearing_i in enumerate(sys_dict["_smearing_acc"]):
-                        sel_truth_i = sel_truth_acc[i] if sel_truth_acc is not None else None
-                        sel_bg_i = sys_dict["sel_background"][i]
-                        if sys_dict["type"] == "xsec" and sig_truth_acc is not None:
-                            sig_truth_i = sig_truth_acc[i]
-                            eff_i = compute_efficiency(sig_truth_i, sel_truth_i)
-                        elif ref_sig_truth is not None:
-                            eff_i = compute_efficiency(ref_sig_truth, sel_truth_i)
-                        else:
-                            eff_i = None
-                        if eff_i is None:
-                            sys_dict["eff_truth"].append(None)
-                            sys_dict["response"].append(None)
-                            sys_dict["sigma_tilde"].append(None)
-                            continue
-                        response_i = convert_smearing_to_response(smearing_i, eff_i)
-                        sigma_i = compute_sigma_tilde(
-                            response_i, ref_sig_truth, sel_bg_i, self.xsec_unit
-                        )
-                        sys_dict["eff_truth"].append(eff_i)
-                        sys_dict["response"].append(response_i)
-                        sys_dict["sigma_tilde"].append(sigma_i)
-                    for tmp_key in ("_smearing_acc", "_sig_truth_var_acc", "_sel_truth_var_acc"):
-                        sys_dict.pop(tmp_key, None)
-                if sys_dict.get("sel"):
-                    sys_dict["rank"] = len(sys_dict["sel"])
-                    sys_dict.pop("_universe_index", None)
-                    continue
-                keys_to_delete.append(key)
-                continue
-
-            sys_dict["sel"] = [arr.copy() for arr in rw_acc["sel"]]
-            sys_dict["sel_background"] = [arr.copy() for arr in rw_acc["sel_background"]]
-            sys_dict["response"] = []
-            sys_dict["sigma_tilde"] = []
-            sys_dict["eff_truth"] = []
-            sys_dict["cv_response"] = None
-            sys_dict["cv_sigma_tilde"] = None
-            if rw_acc["is_multisigma"]:
-                sys_dict["cv_sel"] = rw_acc["cv_sel"].copy()
-            else:
-                sys_dict["cv_sel"] = None
-
-            has_xsec = (
-                cv["has_truth"]
-                and rw_acc["sig_truth"] is not None
-                and rw_acc["sel_truth"] is not None
-                and rw_acc["smearing"] is not None
-            )
-            ref_sig_truth = self.sig_truth
-            if has_xsec and rw_acc["is_multisigma"] and rw_acc["cv_sig_truth"] is not None:
-                cv_sig_truth = rw_acc["cv_sig_truth"]
-                cv_sel_truth = rw_acc["cv_sel_truth"]
-                cv_smearing = rw_acc["cv_smearing"]
-                cv_bg = rw_acc["cv_sel_background"]
-                cv_eff = compute_efficiency(cv_sig_truth, cv_sel_truth)
-                cv_response = convert_smearing_to_response(cv_smearing, cv_eff)
-                cv_sigma = compute_sigma_tilde(cv_response, cv_sig_truth, cv_bg, self.xsec_unit)
-                sys_dict["cv_response"] = cv_response
-                sys_dict["cv_sigma_tilde"] = cv_sigma
-                ref_sig_truth = cv_sig_truth
-
-            if has_xsec:
-                for i, _ in enumerate(sys_dict["sel"]):
-                    sig_truth_i = rw_acc["sig_truth"][i]
-                    sel_truth_i = rw_acc["sel_truth"][i]
-                    smearing_i = rw_acc["smearing"][i]
-                    sel_bg_i = rw_acc["sel_background"][i]
-                    if sys_dict["type"] == "xsec":
-                        eff_i = compute_efficiency(sig_truth_i, sel_truth_i)
-                        response_i = convert_smearing_to_response(smearing_i, eff_i)
-                    else:
-                        eff_i = compute_efficiency(ref_sig_truth, sel_truth_i)
-                        response_i = convert_smearing_to_response(smearing_i, eff_i)
-                    sigma_i = compute_sigma_tilde(response_i, ref_sig_truth, sel_bg_i, self.xsec_unit)
-                    sys_dict["eff_truth"].append(eff_i)
-                    sys_dict["response"].append(response_i)
-                    sys_dict["sigma_tilde"].append(sigma_i)
-            else:
-                for _ in sys_dict["sel"]:
-                    sys_dict["eff_truth"].append(None)
-                    sys_dict["response"].append(None)
-                    sys_dict["sigma_tilde"].append(None)
-
-            sys_dict["rank"] = len(sys_dict["sel"])
-            sys_dict.pop("_universe_index", None)
-            if sys_dict["rank"] == 0:
-                keys_to_delete.append(key)
-        for key in keys_to_delete:
-            self.systematics.pop(key, None)
-        for sys_dict in self.systematics.values():
-            sys_dict.pop("_universe_index", None)
-
-    def save_chunk_checkpoint(self, checkpoint_path):
-        """
-        Save private chunk accumulator to a checkpoint file.
-        """
-        if not hasattr(self, "_chunk_acc"):
-            raise ValueError("Chunk accumulator is not initialized; use for_chunked_build()")
-        with open(checkpoint_path, "wb") as f:
-            pickle.dump(self._chunk_acc, f)
-
-    def load_chunk_checkpoint(self, checkpoint_path):
-        """
-        Load private chunk accumulator from a checkpoint file.
-        """
-        with open(checkpoint_path, "rb") as f:
-            self._chunk_acc = pickle.load(f)

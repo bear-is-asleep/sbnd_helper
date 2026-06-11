@@ -11,10 +11,20 @@ class ParticleGroup(CAF):
     #-------------------- constructor/rep --------------------#
     def __init__(self,data,**kwargs):
       super().__init__(data,**kwargs)
+    @classmethod
+    def load(cls, fname, key, **kwargs):
+      """
+      Load from HDF5 file(s). fname and key may each be a str or list of str.
+      String keys may use shell-style wildcards (*, ?, []), resolved per file.
+      """
+      from sbnd.general.utils import read_hdf_local
+      return CAF._load_combined(
+        fname, key, read_hdf_local, cls, **kwargs
+      )
     #-------------------- cutters --------------------#
     #-------------------- assigners --------------------#
     #-------------------- adders --------------------#
-    def add_track_flipping(self,algo,suffix="",method='direction'):
+    def add_track_flipping(self,algo,method='direction'):
         """
         Add track flipping boolean. True if start and end are correctly matched
 
@@ -31,18 +41,18 @@ class ParticleGroup(CAF):
             return np.column_stack([self.data.loc[:,col].values for col in cols])
 
         if algo == 'pandora':
-            start = _get_vector(f'mu{suffix}.pfp.trk.start')
-            true_start = _get_vector(f'mu{suffix}.pfp.trk.truth.p.start')
-            true_end = _get_vector(f'mu{suffix}.pfp.trk.truth.p.end')
-            direction = _get_vector(f'mu{suffix}.pfp.trk.dir')
-            true_direction = _get_vector(f'mu{suffix}.pfp.trk.truth.p.dir')
+            start = _get_vector(f'mu.pfp.trk.start')
+            true_start = _get_vector(f'mu.pfp.trk.truth.p.start')
+            true_end = _get_vector(f'mu.pfp.trk.truth.p.end')
+            direction = _get_vector(f'mu.pfp.trk.dir')
+            true_direction = _get_vector(f'mu.pfp.trk.truth.p.dir')
             keys = [f'mu.pfp.trk.is_flipped']
         elif algo == 'spine':
-            start = _get_vector(f'mu{suffix}.start_point')
-            true_start = _get_vector(f'mu{suffix}.tpart.start_point')
-            true_end = _get_vector(f'mu{suffix}.tpart.end_point')
-            direction = _get_vector(f'mu{suffix}.tpart.dir')
-            true_direction = _get_vector(f'mu{suffix}.tpart.truth.p.dir')
+            start = _get_vector(f'mu.start_point')
+            true_start = _get_vector(f'mu.tpart.start_point')
+            true_end = _get_vector(f'mu.tpart.end_point')
+            direction = _get_vector(f'mu.tpart.dir')
+            true_direction = _get_vector(f'mu.tpart.truth.p.dir')
             keys = [f'mu.is_flipped']
         else:
             raise ValueError(f'Invalid algo: {algo}')

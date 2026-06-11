@@ -30,9 +30,11 @@ class MCPrim(CAF):
                       ,momentum_bins=self.momentum_binning
                       ,costheta_bins=self.costheta_binning
                       ,pot=self.pot)
-    def load(fname,key='mcprim',**kwargs):
-      df = pd.read_hdf(fname,key=key,**kwargs)
-      return MCPrim(df,**kwargs)
+    def load(fname, key='mcprim', **kwargs):
+      from sbnd.general.utils import read_hdf_local
+      return CAF._load_combined(
+        fname, key, read_hdf_local, MCPrim, **kwargs
+      )
     def postprocess(self,nu=None,drop_noninteracting=True):
       """
       Run all post processing

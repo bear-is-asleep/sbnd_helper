@@ -86,3 +86,13 @@ def verify_differential_mapping(n_costheta_bins=None, n_momentum_bins=None):
 DIFFERENTIAL_BINS = (len(DIFF_COSTHETA_BINS)-2) + (len(DIFF_MOMENTUM_BINS_2D)-2)*(len(DIFF_COSTHETA_BINS)-1)
 DIFFERENTIAL_EDGES = np.arange(-1.5,np.max(DIFFERENTIAL_BINS)+1.5,1)
 DIFFERENTIAL_CENTERS = (DIFFERENTIAL_EDGES[:-1] + DIFFERENTIAL_EDGES[1:])/2.
+
+# Detector-systematics reco bin edges (build_detsys_universes / analyze_detsys_universes)
+BCFM_BINS = np.arange(0, 1.1, 0.025)
+FLASHPE_BINS = np.arange(0, 10500, 500)
+TRACK_XY_BINS = np.arange(-210, 230, 20)
+TRACK_Z_BINS = np.arange(-10, 530, 20)
+TRACK_LENGTH_BINS = np.arange(0, 450, 25)
+TRACK_PHI_BIN_WIDTH = np.pi / 12
+TRACK_PHI_BINS = np.arange(-np.pi, np.pi + TRACK_PHI_BIN_WIDTH, TRACK_PHI_BIN_WIDTH)
+TRACK_THETA_BINS = np.arange(0, np.pi + TRACK_PHI_BIN_WIDTH, TRACK_PHI_BIN_WIDTH)

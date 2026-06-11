@@ -9,11 +9,10 @@ import os
 import numba as nb
 from itertools import chain
 import pandas as pd
-from contextlib import contextmanager
-import tempfile
-import subprocess
 import h5py
-from .h5filemanager import H5FileManager
+import fnmatch
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 
 def get_chi2_dof_pval_str(chi2,dof,pval,round_to=10,diag=False):
   chi2 = round(chi2,round_to)
@@ -50,33 +49,177 @@ def get_nperbin(series,bins,weights=None,sum_hists=False):
     nperbin = np.sum(nperbin, axis=0)
   return nperbin
 
-def h5py_file_xrootd(path, mode='r', **kwargs):
-    """Wrapper for h5py.File that handles XRootD URLs - NO COPYING!"""
-    return H5FileManager(path, mode=mode, **kwargs)
+_HDF5_MAGIC = b'\x89HDF\r\n\x1a\n'
 
-def read_hdf_xrootd(path, key=None, **kwargs):
-    """Wrapper for pd.read_hdf that handles XRootD URLs."""
-    with xrootd_file(path) as local_path:
-        if key is not None:
-          if isinstance(key, list):
-            dfs = [pd.read_hdf(local_path, key=k, **kwargs) for k in key]
-            return pd.concat(dfs)
-          else:
-            return pd.read_hdf(local_path, key=key, **kwargs)
+
+def _is_wildcard_hdf_key(key):
+    return isinstance(key, str) and any(c in key for c in ('*', '?', '['))
+
+
+def is_hdf5_file(path):
+    """True if path exists and has an HDF5 file signature."""
+    try:
+        if not os.path.isfile(path):
+            return False
+        if os.path.getsize(path) < len(_HDF5_MAGIC):
+            return False
+        with open(path, 'rb') as f:
+            return f.read(len(_HDF5_MAGIC)) == _HDF5_MAGIC
+    except OSError:
+        return False
+
+
+def filter_hdf_files(files, warn=True):
+    """Return only paths that look like readable HDF5 files."""
+    paths = _normalize_path_list(files, 'files')
+    valid = [p for p in paths if is_hdf5_file(p)]
+    if warn:
+        for p in paths:
+            if p not in valid:
+                print(f'WARNING: skipping non-HDF5 file: {p}')
+    return valid
+
+
+def _list_hdf_keys(path):
+    with h5py.File(path, 'r') as f:
+        return list(f.keys())
+
+
+def _resolve_hdf_keys(path, key):
+    """Expand literal keys and shell-style patterns (*, ?, [])."""
+    keys = key if isinstance(key, list) else [key]
+    resolved = []
+    for k in keys:
+        if not isinstance(k, str):
+            raise ValueError(f'Invalid HDF key type: {type(k)}')
+        if _is_wildcard_hdf_key(k):
+            matched = sorted(fnmatch.filter(_list_hdf_keys(path), k))
+            if not matched:
+                raise ValueError(f'No HDF5 keys in {path} match pattern {k!r}')
+            resolved.extend(matched)
         else:
-            return pd.read_hdf(local_path, **kwargs)
+            resolved.append(k)
+    seen = set()
+    deduped = []
+    for k in resolved:
+        if k not in seen:
+            seen.add(k)
+            deduped.append(k)
+    return deduped
+
+
+def _read_hdf_single(path, key=None, **kwargs):
+    """Read one local HDF5 file."""
+    if key is None:
+        return pd.read_hdf(path, **kwargs)
+    keys = _resolve_hdf_keys(path, key)
+    if len(keys) == 1:
+        return pd.read_hdf(path, key=keys[0], **kwargs)
+    dfs = [pd.read_hdf(path, key=k, **kwargs) for k in keys]
+    return pd.concat(dfs)
+
+
+def read_hdf_local(fname, key, **kwargs):
+    """Module-level HDF reader for CAF loaders (picklable, local path)."""
+    return _read_hdf_single(fname, key=key, **kwargs)
+
+
+def _read_hdf_task(task):
+    path, key, kwargs = task
+    return _read_hdf_single(path, key=key, **kwargs)
+
+
+def _normalize_path_list(path, name='paths'):
+    if isinstance(path, str):
+        return [path]
+    if isinstance(path, (list, tuple)):
+        paths = list(path)
+        if not paths:
+            raise ValueError(f'No {name} provided')
+        return paths
+    raise ValueError(f'Invalid {name}: {path}')
+
+
+def parallel_map_ordered(
+    func, tasks, ncpu=1, show_progress=False, desc='Processing', parallel_backend='process',
+):
+    """Run func(task) over tasks in parallel; return results in input order.
+
+    parallel_backend : {'process', 'thread'}
+        'process' (default) uses spawn workers; required for HDF5/pytables
+        which are not thread-safe. 'thread' is only safe for non-HDF work.
+    """
+    tasks = list(tasks)
+    n = len(tasks)
+    if n == 0:
+        return []
+
+    workers = max(1, min(ncpu, n)) if ncpu else n
+    if workers == 1:
+        it = tasks
+        if show_progress:
+            from tqdm import tqdm
+            it = tqdm(it, total=n, desc=desc)
+        return [func(t) for t in it]
+
+    results = [None] * n
+    if parallel_backend == 'process':
+        ctx = multiprocessing.get_context('spawn')
+        executor = ProcessPoolExecutor(max_workers=workers, mp_context=ctx)
+    elif parallel_backend == 'thread':
+        executor = ThreadPoolExecutor(max_workers=workers)
+    else:
+        raise ValueError(f'Invalid parallel_backend: {parallel_backend!r}')
+
+    with executor as ex:
+        futs = {ex.submit(func, t): i for i, t in enumerate(tasks)}
+        it = as_completed(futs)
+        if show_progress:
+            from tqdm import tqdm
+            it = tqdm(it, total=n, desc=desc)
+        for fut in it:
+            results[futs[fut]] = fut.result()
+    return results
+
+
+def read_hdf(path, key=None, ncpu=1, concat=True, **kwargs):
+    """Read HDF5 file(s) from local paths via pd.read_hdf.
+
+    path may be a single file or a list/tuple of files. For multiple files,
+    reads in parallel with spawned processes (ncpu > 1).
+
+    key may be a string, a list of strings, or a shell-style pattern
+    (*, ?, []) matched against keys in each file. Multiple key matches
+    within one file are concatenated in sorted order.
+
+    Parameters
+    ----------
+    ncpu : int
+        Worker processes for multi-file reads. 1 = sequential.
+    concat : bool
+        If True (default), concatenate DataFrames from all files/keys.
+        If False, return a list of DataFrames in input path order.
+    ignore_index : bool
+        Passed to pd.concat when combining multiple files (default False).
+    """
+    ignore_index = kwargs.pop('ignore_index', False)
+    show_progress = kwargs.pop('show_progress', False)
+    paths = _normalize_path_list(path)
+    if len(paths) == 1:
+        return _read_hdf_single(paths[0], key=key, **kwargs)
+
+    read_kwargs = dict(kwargs)
+    tasks = [(p, key, read_kwargs) for p in paths]
+    dfs = parallel_map_ordered(
+        _read_hdf_task, tasks, ncpu=ncpu, show_progress=show_progress,
+        desc='read_hdf',
+    )
+    if not concat:
+        return dfs
+    return pd.concat(dfs, ignore_index=ignore_index)
 
 def col_tuple_to_key(col):
     return '.'.join(str(level) for level in col if level)
-
-@contextmanager
-def xrootd_file(xrootd_path, cleanup=True, verbose=False):
-    """
-    Context manager to handle XRootD URLs for pandas read_hdf.
-    """
-    from .h5filemanager import xrootd_file as _xrootd_file
-    with _xrootd_file(xrootd_path, cleanup=cleanup, verbose=verbose) as path:
-        yield path
 
 def get_sys_keys(pattern,keys):
   sys_keys = []
@@ -85,11 +228,6 @@ def get_sys_keys(pattern,keys):
       if pattern in t:
         sys_keys.append(k)
   return sys_keys
-
-def convert_pnfs_to_xroot(path):
-    if path.startswith("/pnfs"):
-        return path.replace("/pnfs", "root://fndcadoor.fnal.gov:1094/pnfs/fnal.gov/usr")
-    return path
 
 def get_weights_from_sys_keys(sys_keys,data):
   """
@@ -262,6 +400,41 @@ def get_inds_from_sub_inds(inds,sub_inds,length):
       if ind[:length] in sub_inds:
           matched_inds.add(ind)
   return list(matched_inds)
+
+def offset_ntuple_index(df, index_offset, *, step=1000):
+    """
+    Shift index so concatenated chunks have unique keys.
+
+    Adds ``step * index_offset`` to the ``__ntuple`` index level when present,
+    otherwise to the first MultiIndex level or a flat index.
+    """
+    if index_offset == 0:
+        return df
+    shift = step * index_offset
+    if not isinstance(df.index, pd.MultiIndex):
+        out = df.copy()
+        out.index = out.index + shift
+        return out
+    idx = df.index
+    level = idx.names.index("__ntuple") if "__ntuple" in idx.names else 0
+    arrays = [idx.get_level_values(i) for i in range(idx.nlevels)]
+    arrays[level] = arrays[level] + shift
+    out = df.copy()
+    out.index = pd.MultiIndex.from_arrays(arrays, names=idx.names)
+    return out
+
+
+def concat_with_ntuple_offset(dfs, *, step=1000):
+    """Concatenate DataFrames after per-chunk ``__ntuple`` index offsets."""
+    if not dfs:
+        raise ValueError("No dataframes to concatenate")
+    if len(dfs) == 1:
+        return dfs[0]
+    return pd.concat(
+        [offset_ntuple_index(df, i, step=step) for i, df in enumerate(dfs)],
+        axis=0,
+    )
+
 
 def get_sub_inds_from_inds(inds,sub_inds,length):
   """
